@@ -102,13 +102,13 @@ def apply_custom_css() -> None:
         """
         <style>
         :root {
-            --bg: #050505;
-            --panel: #10100C;
-            --panel-soft: #19170F;
-            --border: rgba(245, 200, 75, 0.24);
-            --text-soft: #B8B29F;
-            --cyan: #FFD84A;
-            --green: #FFB000;
+            --bg: #08111F;
+            --panel: #101B2D;
+            --panel-soft: #152238;
+            --border: rgba(0, 209, 255, 0.24);
+            --text-soft: #AAB6C8;
+            --cyan: #00D1FF;
+            --green: #4F8CFF;
         }
 
         .stApp {
