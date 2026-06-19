@@ -877,7 +877,7 @@ def to_excel_bytes(clean_df: pd.DataFrame, pivot_analysis_df: pd.DataFrame | Non
         write_table_sheet(writer, clean_df, "Clean Dataset", "AtlasFlowCleanDataset")
 
         if pivot_analysis_df is not None and not pivot_analysis_df.empty:
-            write_table_sheet(writer, pivot_analysis_df, "Pivot Analysis", "AtlasFlowPivotAnalysis")
+            write_table_sheet(writer, pivot_analysis_df, "Summary Analysis", "AtlasFlowSummaryAnalysis")
 
     return output.getvalue()
 
@@ -894,18 +894,23 @@ def flatten_pivot_columns(df: pd.DataFrame) -> pd.DataFrame:
     return flat_df
 
 
-def build_pivot_analysis(
+def build_summary_analysis(
     clean_df: pd.DataFrame,
-    row_fields: list[str],
-    column_fields: list[str],
-    value_field: str,
+    group_fields: list[str],
+    value_fields: list[str],
     aggregation: str,
 ) -> pd.DataFrame:
-    if clean_df.empty or not row_fields or not value_field or value_field not in clean_df.columns:
+    if clean_df.empty or not group_fields or not value_fields:
+        return pd.DataFrame()
+
+    valid_group_fields = [column for column in group_fields if column in clean_df.columns]
+    valid_value_fields = [column for column in value_fields if column in clean_df.columns]
+    if not valid_group_fields or not valid_value_fields:
         return pd.DataFrame()
 
     source_df = clean_df.copy()
-    source_df[value_field] = pd.to_numeric(source_df[value_field], errors="coerce")
+    for column in valid_value_fields:
+        source_df[column] = pd.to_numeric(source_df[column], errors="coerce")
 
     aggregation_map = {
         "Average": "mean",
@@ -917,16 +922,18 @@ def build_pivot_analysis(
     }
     aggfunc = aggregation_map.get(aggregation, "mean")
 
-    pivot_df = pd.pivot_table(
-        source_df,
-        values=value_field,
-        index=row_fields,
-        columns=column_fields if column_fields else None,
-        aggfunc=aggfunc,
-        dropna=False,
-    ).reset_index()
+    summary_df = (
+        source_df
+        .groupby(valid_group_fields, dropna=False, as_index=False)[valid_value_fields]
+        .agg(aggfunc)
+    )
 
-    return flatten_pivot_columns(pivot_df)
+    if aggregation != "Count":
+        for column in valid_value_fields:
+            summary_df[column] = pd.to_numeric(summary_df[column], errors="coerce").round(3)
+
+    rename_map = {column: f"{aggregation} {column}" for column in valid_value_fields}
+    return summary_df.rename(columns=rename_map)
 
 
 def numeric_column_options(df: pd.DataFrame) -> list[str]:
@@ -1357,12 +1364,10 @@ def main() -> None:
     previous_selected_variables = st.session_state.get("atlas_selected_variables", [])
     if not isinstance(previous_selected_variables, list):
         previous_selected_variables = []
-
     valid_default_variables = [
         variable for variable in previous_selected_variables
         if variable in variable_options
     ]
-
     selected_variables = st.sidebar.multiselect(
         "Variables to include and filter",
         options=variable_options,
@@ -1438,68 +1443,67 @@ def main() -> None:
                 "Use the Excel export for the full filtered pivot table."
             )
 
-        st.markdown('<div class="section-title">Excel Pivot Builder</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Excel Summary Builder</div>', unsafe_allow_html=True)
         st.caption(
-            "Configure the optional Pivot Analysis sheet. The Clean Dataset sheet always exports the exact table shown above."
+            "Configure the optional Summary Analysis sheet. The Clean Dataset sheet always exports the exact table shown above."
         )
 
-        pivot_builder_columns = [column for column in output_df.columns]
-        pivot_value_options = numeric_column_options(output_df)
+        summary_builder_columns = [column for column in output_df.columns]
+        summary_value_options = numeric_column_options(output_df)
 
-        builder_cols = st.columns(4)
+        builder_cols = st.columns(3)
         with builder_cols[0]:
-            pivot_row_fields = st.multiselect(
-                "Pivot row fields",
-                options=pivot_builder_columns,
-                default=[column for column in ["ShipName"] if column in pivot_builder_columns],
-                key="atlas_export_pivot_rows",
+            summary_group_fields = st.multiselect(
+                "Group by fields",
+                options=summary_builder_columns,
+                default=[column for column in ["ShipName", "ReportType"] if column in summary_builder_columns],
+                key="atlas_export_summary_groups",
+                help="Choose the fields that define each summary row.",
             )
         with builder_cols[1]:
-            pivot_column_fields = st.multiselect(
-                "Pivot column fields",
-                options=[column for column in pivot_builder_columns if column not in pivot_row_fields],
-                default=[column for column in ["ReportType"] if column in pivot_builder_columns and column not in pivot_row_fields],
-                key="atlas_export_pivot_columns",
+            previous_summary_values = st.session_state.get("atlas_export_summary_values", [])
+            if not isinstance(previous_summary_values, list):
+                previous_summary_values = []
+            valid_summary_value_defaults = [
+                column for column in previous_summary_values
+                if column in summary_value_options
+            ]
+            summary_value_fields = st.multiselect(
+                "Value fields",
+                options=summary_value_options,
+                default=valid_summary_value_defaults,
+                key="atlas_export_summary_values",
+                help="Choose one or more numeric columns to aggregate.",
             )
         with builder_cols[2]:
-            pivot_value_field = st.selectbox(
-                "Pivot value field",
-                options=pivot_value_options,
-                index=0 if pivot_value_options else None,
-                key="atlas_export_pivot_value",
-                placeholder="Select numeric value",
-            )
-        with builder_cols[3]:
-            pivot_aggregation = st.selectbox(
+            summary_aggregation = st.selectbox(
                 "Aggregation",
                 options=["Average", "Sum", "Count", "Minimum", "Maximum", "Median"],
                 index=0,
-                key="atlas_export_pivot_aggregation",
+                key="atlas_export_summary_aggregation",
             )
 
-        pivot_analysis_df = pd.DataFrame()
-        if pivot_row_fields and pivot_value_field:
-            pivot_analysis_df = build_pivot_analysis(
+        summary_analysis_df = pd.DataFrame()
+        if summary_group_fields and summary_value_fields:
+            summary_analysis_df = build_summary_analysis(
                 output_df,
-                row_fields=pivot_row_fields,
-                column_fields=pivot_column_fields,
-                value_field=pivot_value_field,
-                aggregation=pivot_aggregation,
+                group_fields=summary_group_fields,
+                value_fields=summary_value_fields,
+                aggregation=summary_aggregation,
             )
 
-        if pivot_analysis_df.empty:
-            st.caption("Pivot Analysis sheet will be skipped unless at least one row field and one numeric value field are selected.")
+        if summary_analysis_df.empty:
+            st.caption("Summary Analysis sheet will be skipped unless at least one group field and one value field are selected.")
         else:
-            with st.expander("Preview Pivot Analysis", expanded=False):
-                st.dataframe(format_display_dataframe(pivot_analysis_df.head(TABLE_PREVIEW_ROW_LIMIT)), use_container_width=True, hide_index=True)
+            with st.expander("Preview Summary Analysis", expanded=False):
+                st.dataframe(format_display_dataframe(summary_analysis_df.head(TABLE_PREVIEW_ROW_LIMIT)), use_container_width=True, hide_index=True)
 
         export_signature_payload = "|".join([
             sha256(pd.util.hash_pandas_object(output_df, index=True).values.tobytes()).hexdigest(),
-            sha256(pd.util.hash_pandas_object(pivot_analysis_df, index=True).values.tobytes()).hexdigest() if not pivot_analysis_df.empty else "no_pivot",
-            ",".join(pivot_row_fields),
-            ",".join(pivot_column_fields),
-            str(pivot_value_field),
-            pivot_aggregation,
+            sha256(pd.util.hash_pandas_object(summary_analysis_df, index=True).values.tobytes()).hexdigest() if not summary_analysis_df.empty else "no_summary",
+            ",".join(summary_group_fields),
+            ",".join(summary_value_fields),
+            summary_aggregation,
         ])
         current_export_signature = sha256(export_signature_payload.encode("utf-8")).hexdigest()
 
@@ -1512,7 +1516,7 @@ def main() -> None:
             with st.spinner("Preparing Excel file..."):
                 st.session_state["atlas_export_bytes"] = to_excel_bytes(
                     output_df,
-                    pivot_analysis_df if not pivot_analysis_df.empty else None,
+                    summary_analysis_df if not summary_analysis_df.empty else None,
                 )
                 st.session_state["atlas_export_signature"] = current_export_signature
             export_ready = True
