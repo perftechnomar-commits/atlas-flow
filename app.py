@@ -480,7 +480,7 @@ def render_header(selected_group: str, selected_vessels: list[str], selected_var
     st.markdown(
         f"""
         <div class="dashboard-hero">
-            <div class="eyebrow">Marorka API Noon Reports</div>
+            <div class="eyebrow">Marorka API Explorer</div>
             <h1 class="dashboard-title">Atlas Flow</h1>
             <div class="dashboard-subtitle">
                 {escape(selected_group)} | {escape(vessel_text)} | {escape(variable_text)}
