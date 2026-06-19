@@ -1818,6 +1818,7 @@ def fetch_report_data_to_snapshot(
     scanned_rows = 0
     kept_rows_total = 0
     tmp_file = RAW_SNAPSHOT_FILE.with_suffix(".tmp.parquet")
+    tmp_file.parent.mkdir(parents=True, exist_ok=True)
     if tmp_file.exists():
         tmp_file.unlink()
 
@@ -1912,6 +1913,7 @@ def fetch_wide_source_to_snapshot(
     row_count = 0
     all_columns: list[str] = []
     tmp_file = Path(config["snapshot_file"]).with_suffix(".tmp.parquet")
+    tmp_file.parent.mkdir(parents=True, exist_ok=True)
     if tmp_file.exists():
         tmp_file.unlink()
 
