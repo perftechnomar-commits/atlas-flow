@@ -16,6 +16,8 @@ from urllib.parse import urlencode, urljoin
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
@@ -1761,6 +1763,250 @@ def render_date_slicer(df: pd.DataFrame) -> tuple[date, date]:
     return selected_start, selected_end
 
 
+
+
+# =============================================================================
+# Streamlit Cloud-safe snapshot refresh helpers
+# =============================================================================
+
+
+def normalize_snapshot_values(df: pd.DataFrame) -> pd.DataFrame:
+    """Store raw API values as nullable strings to keep Parquet schemas stable page by page."""
+    if df.empty:
+        return df.copy()
+    safe_df = df.copy()
+    for column in safe_df.columns:
+        safe_df[column] = safe_df[column].astype("string")
+    return safe_df
+
+
+def write_parquet_pages(page_frames: list[pd.DataFrame], output_file: Path) -> int:
+    """Write already-normalized page frames into one Parquet file with a stable schema."""
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    writer = None
+    row_count = 0
+    try:
+        for frame in page_frames:
+            if frame.empty:
+                continue
+            normalized = normalize_snapshot_values(frame)
+            table = pa.Table.from_pandas(normalized, preserve_index=False)
+            if writer is None:
+                writer = pq.ParquetWriter(output_file, table.schema, compression="zstd")
+            writer.write_table(table)
+            row_count += len(normalized)
+    finally:
+        if writer is not None:
+            writer.close()
+    return row_count
+
+
+def fetch_report_data_to_snapshot(
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    start_date: date,
+) -> dict[str, Any]:
+    """Fetch ReportData page-by-page and write to Parquet without keeping the full dataset in memory."""
+    started_at = time.perf_counter()
+    next_url = build_odata_url(start_date)
+    first_url = next_url
+    seen_urls: set[str] = set()
+    pages = 0
+    total_bytes = 0
+    scanned_rows = 0
+    kept_rows_total = 0
+    tmp_file = RAW_SNAPSHOT_FILE.with_suffix(".tmp.parquet")
+    if tmp_file.exists():
+        tmp_file.unlink()
+
+    auth = request_auth(username, password, auth_method)
+    headers = request_headers(token, auth_method)
+    writer = None
+
+    try:
+        with requests.Session() as session:
+            session.headers.update(headers)
+            for _ in range(MAX_ODATA_PAGES):
+                if next_url in seen_urls:
+                    break
+                seen_urls.add(next_url)
+
+                response = session.get(next_url, auth=auth, timeout=90)
+                total_bytes += len(response.content)
+                response.raise_for_status()
+                pages += 1
+
+                page_rows, next_link = extract_odata_page(response.json())
+                scanned_rows += len(page_rows)
+                compact_rows = compact_odata_rows(page_rows)
+                if compact_rows:
+                    page_df = normalize_snapshot_values(rows_to_dataframe(compact_rows))
+                    table = pa.Table.from_pandas(page_df, preserve_index=False)
+                    if writer is None:
+                        writer = pq.ParquetWriter(tmp_file, table.schema, compression="zstd")
+                    writer.write_table(table)
+                    kept_rows_total += len(page_df)
+                    del page_df, table
+
+                del page_rows, compact_rows
+                gc.collect()
+
+                if not next_link:
+                    break
+                next_url = urljoin(next_url, next_link)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    if kept_rows_total == 0:
+        empty_df = normalize_snapshot_values(pd.DataFrame(columns=SOURCE_COLUMNS))
+        empty_df.to_parquet(tmp_file, index=False)
+
+    tmp_file.replace(RAW_SNAPSHOT_FILE)
+    loaded_at_utc = datetime.now(timezone.utc)
+    metadata = {
+        "loaded_at_utc": loaded_at_utc.strftime("%d-%m-%Y %H:%M:%S UTC"),
+        "loaded_at_local": local_time_label(loaded_at_utc),
+        "rows": kept_rows_total,
+        "kept_rows": kept_rows_total,
+        "scanned_rows": scanned_rows,
+        "discarded_rows": max(scanned_rows - kept_rows_total, 0),
+        "pages": pages,
+        "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
+        "fetch_seconds": round(time.perf_counter() - started_at, 2),
+        "first_url": first_url,
+        "hit_page_limit": pages >= MAX_ODATA_PAGES,
+        "loaded_start_date": start_date.isoformat(),
+        "snapshot_format": "parquet",
+    }
+    signature = request_signature(username, auth_method, start_date)
+    snapshot_payload = {
+        "metadata": metadata,
+        "signature": signature,
+        "saved_at_utc": datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M:%S UTC"),
+    }
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    METADATA_SNAPSHOT_FILE.write_text(json.dumps(snapshot_payload, indent=2, default=str), encoding="utf-8")
+    return metadata
+
+
+def fetch_wide_source_to_snapshot(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    start_date: date,
+) -> dict[str, Any]:
+    """Fetch a wide OData source page-by-page and write to Parquet safely."""
+    config = SOURCE_CONFIGS[source_key]
+    endpoint = str(config["endpoint"])
+    datetime_column = str(config.get("datetime_candidates", ["DateTime"])[0])
+    next_url = build_wide_odata_url(endpoint, start_date, datetime_column)
+    first_url = next_url
+    seen_urls: set[str] = set()
+    pages = 0
+    total_bytes = 0
+    row_count = 0
+    all_columns: list[str] = []
+    tmp_file = Path(config["snapshot_file"]).with_suffix(".tmp.parquet")
+    if tmp_file.exists():
+        tmp_file.unlink()
+
+    auth = request_auth(username, password, auth_method)
+    headers = request_headers(token, auth_method)
+    writer = None
+    started_at = time.perf_counter()
+
+    try:
+        with requests.Session() as session:
+            session.headers.update(headers)
+            for _ in range(MAX_ODATA_PAGES):
+                if next_url in seen_urls:
+                    break
+                seen_urls.add(next_url)
+                response = session.get(next_url, auth=auth, timeout=90)
+                total_bytes += len(response.content)
+                response.raise_for_status()
+                pages += 1
+
+                page_rows, next_link = extract_odata_page(response.json())
+                page_df = pd.DataFrame(page_rows)
+                if "__metadata" in page_df.columns:
+                    page_df = page_df.drop(columns=["__metadata"])
+
+                if not page_df.empty:
+                    if not all_columns:
+                        all_columns = list(page_df.columns)
+                    else:
+                        for column in page_df.columns:
+                            if column not in all_columns:
+                                all_columns.append(column)
+                        for column in all_columns:
+                            if column not in page_df.columns:
+                                page_df[column] = pd.NA
+                        page_df = page_df[all_columns]
+
+                    page_df = normalize_snapshot_values(page_df)
+                    table = pa.Table.from_pandas(page_df, preserve_index=False)
+                    if writer is None:
+                        writer = pq.ParquetWriter(tmp_file, table.schema, compression="zstd")
+                    else:
+                        # New columns after the first page are rare; keep only first-page schema to avoid schema errors.
+                        schema_names = writer.schema.names
+                        page_df = page_df[[column for column in schema_names if column in page_df.columns]]
+                        for column in schema_names:
+                            if column not in page_df.columns:
+                                page_df[column] = pd.NA
+                        page_df = page_df[schema_names]
+                        table = pa.Table.from_pandas(page_df, schema=writer.schema, preserve_index=False)
+                    writer.write_table(table)
+                    row_count += len(page_df)
+                    del page_df, table
+
+                del page_rows
+                gc.collect()
+
+                if not next_link:
+                    break
+                next_url = urljoin(next_url, next_link)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    if row_count == 0:
+        pd.DataFrame().to_parquet(tmp_file, index=False)
+
+    tmp_file.replace(Path(config["snapshot_file"]))
+    loaded_at_utc = datetime.now(timezone.utc)
+    metadata = {
+        "source": config["label"],
+        "endpoint": endpoint,
+        "loaded_at_utc": loaded_at_utc.strftime("%d-%m-%Y %H:%M:%S UTC"),
+        "loaded_at_local": local_time_label(loaded_at_utc),
+        "loaded_start_date": start_date.isoformat(),
+        "rows": int(row_count),
+        "columns": int(len(all_columns)),
+        "pages": pages,
+        "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
+        "fetch_seconds": round(time.perf_counter() - started_at, 2),
+        "first_url": first_url,
+        "hit_page_limit": pages >= MAX_ODATA_PAGES,
+        "snapshot_format": "parquet",
+    }
+    signature = source_signature(source_key, username, auth_method, start_date)
+    payload = {
+        "metadata": metadata,
+        "signature": signature,
+        "saved_at_utc": datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M:%S UTC"),
+    }
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    Path(config["metadata_file"]).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return metadata
+
+
 # =============================================================================
 # Warmup
 # =============================================================================
@@ -1786,9 +2032,15 @@ def run_warmup_if_requested() -> None:
         st.error("Warmup failed: MARORKA_USERNAME and MARORKA_PASSWORD are required.")
         st.stop()
 
-    valid_sources = {"reportdata", "reportpivots", "shippivots", "all"}
+    valid_sources = {"reportdata", "reportpivots", "shippivots"}
+    if requested_source == "all":
+        st.error(
+            "source=all is disabled on Streamlit Cloud to avoid memory limits. "
+            "Warm up reportdata, reportpivots, and shippivots one at a time."
+        )
+        st.stop()
     if requested_source not in valid_sources:
-        st.error("Invalid warmup source. Use reportdata, reportpivots, shippivots, or all.")
+        st.error("Invalid warmup source. Use reportdata, reportpivots, or shippivots.")
         st.stop()
 
     if get_query_param("force", "0") == "1":
@@ -1797,28 +2049,13 @@ def run_warmup_if_requested() -> None:
         cached_prepare_long_data.clear()
         build_pivot_table.clear()
 
-    source_sequence = ["reportdata", "reportpivots", "shippivots"] if requested_source == "all" else [requested_source]
-    warmed_sources: dict[str, int] = {}
-    metadata: dict[str, Any] = {}
-
     try:
         with st.spinner(f"Warming up AtlasFlow source: {requested_source}..."):
-            for source_key in source_sequence:
-                if source_key == "reportdata":
-                    raw_df, metadata = fetch_report_data(username, password, token, auth_method, start_date)
-                    warmup_signature = request_signature(username, auth_method, start_date)
-                    save_raw_snapshot(raw_df, metadata, warmup_signature)
-                    warmed_sources["ReportData"] = int(len(raw_df))
-                    del raw_df
-                else:
-                    source_df, metadata = fetch_wide_odata_source(
-                        source_key, username, password, token, auth_method, start_date
-                    )
-                    source_sig = source_signature(source_key, username, auth_method, start_date)
-                    save_source_snapshot(source_key, source_df, metadata, source_sig)
-                    warmed_sources[str(SOURCE_CONFIGS[source_key]["label"])] = int(len(source_df))
-                    del source_df
-                gc.collect()
+            if requested_source == "reportdata":
+                metadata = fetch_report_data_to_snapshot(username, password, token, auth_method, start_date)
+            else:
+                metadata = fetch_wide_source_to_snapshot(requested_source, username, password, token, auth_method, start_date)
+            gc.collect()
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
         st.error(f"Warmup failed: Marorka API request failed with status {status}.")
@@ -1832,7 +2069,10 @@ def run_warmup_if_requested() -> None:
         {
             "source": requested_source,
             "last_api_load_local": metadata.get("loaded_at_local", "-"),
-            "warmed_sources": warmed_sources,
+            "rows": metadata.get("rows", metadata.get("kept_rows", 0)),
+            "pages": metadata.get("pages", 0),
+            "downloaded_mb": metadata.get("downloaded_mb", "-"),
+            "fetch_seconds": metadata.get("fetch_seconds", "-"),
             "snapshot_format": "parquet",
             "force_refresh": get_query_param("force", "0") == "1",
         }
@@ -1884,32 +2124,15 @@ def main() -> None:
             needs_raw_load = False
 
     if needs_raw_load:
-        if refresh:
-            cached_fetch_report_data.clear()
-            cached_prepare_long_data.clear()
-            build_pivot_table.clear()
-        try:
-            with st.spinner("Refreshing API..." if refresh else "Loading API..."):
-                raw_df, metadata = cached_fetch_report_data(
-                    username=username,
-                    password=password,
-                    token=token,
-                    auth_method=auth_method,
-                    start_date=api_start_date,
-                )
-            set_loaded_raw_state(raw_df, metadata, raw_signature)
-            save_raw_snapshot(raw_df, metadata, raw_signature)
-            long_df = None
-        except requests.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else "unknown"
-            st.error(f"Marorka API request failed with status {status}.")
-            st.caption("If credentials are correct, try MARORKA_AUTH_METHOD = 'digest'.")
-            if exc.response is not None and exc.response.request is not None:
-                st.code(exc.response.request.url, language="text")
-            st.stop()
-        except (MarorkaConfigError, ValueError, requests.RequestException) as exc:
-            st.error(str(exc))
-            st.stop()
+        st.warning(
+            "No usable ReportData snapshot is available yet. "
+            "Run the ReportData warmup URL first so AtlasFlow can open from stored Parquet data instead of live-loading the large API in the UI."
+        )
+        st.code(
+            "https://atlas-flow.streamlit.app/?warmup=1&force=1&source=reportdata&token=warmup-atlas-flow",
+            language="text",
+        )
+        st.stop()
 
     prepare_signature = {**raw_signature, "prepare_version": "atlasflow_dynamic_pivot_v2_calculations"}
     current_prepare_signature = st.session_state.get("loaded_prepare_signature")
