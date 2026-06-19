@@ -998,8 +998,34 @@ def format_display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return display_df.fillna("-")
 
 
+def make_unique_excel_columns(columns: list[Any]) -> list[str]:
+    """Return Excel-table-safe, unique column names while preserving readable labels."""
+    safe_columns: list[str] = []
+    seen: dict[str, int] = {}
+
+    for position, column in enumerate(columns, start=1):
+        label = str(column).strip() if column is not None else ""
+        label = re.sub(r"[\x00-\x1f]", "", label)
+        if not label or label.lower() in {"nan", "nat", "none"}:
+            label = f"Column {position}"
+        label = label[:240]
+
+        key = label.casefold()
+        count = seen.get(key, 0)
+        if count:
+            suffix = f"_{count + 1}"
+            label = f"{label[:240 - len(suffix)]}{suffix}"
+            key = label.casefold()
+        seen[key] = count + 1
+        safe_columns.append(label)
+
+    return safe_columns
+
+
 def make_excel_safe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     safe_df = df.copy()
+    safe_df.columns = make_unique_excel_columns(list(safe_df.columns))
+    safe_df = safe_df.replace([float("inf"), float("-inf")], pd.NA)
     for column in safe_df.columns:
         if pd.api.types.is_datetime64_any_dtype(safe_df[column]):
             safe_df[column] = pd.to_datetime(safe_df[column], errors="coerce").dt.tz_localize(None)
@@ -1007,7 +1033,13 @@ def make_excel_safe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_excel_table(worksheet: Any, table_name: str) -> None:
-    if worksheet.max_row < 1 or worksheet.max_column < 1:
+    if worksheet.max_row < 2 or worksheet.max_column < 1:
+        return
+
+    headers = [worksheet.cell(row=1, column=col).value for col in range(1, worksheet.max_column + 1)]
+    if any(header is None or str(header).strip() == "" for header in headers):
+        return
+    if len({str(header).casefold() for header in headers}) != len(headers):
         return
 
     table_ref = f"A1:{get_column_letter(worksheet.max_column)}{worksheet.max_row}"
