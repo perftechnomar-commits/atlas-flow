@@ -228,7 +228,7 @@ def apply_custom_css() -> None:
         }
 
         div[data-baseweb="select"] > div,
-        div[data-baseweb="input"] > div,
+        div[data-baseweb="input"],
         textarea {
             background-color: var(--input-bg) !important;
             border: 1px solid rgba(139, 92, 246, 0.30) !important;
@@ -236,28 +236,33 @@ def apply_custom_css() -> None:
             box-shadow: none !important;
             outline: none !important;
             color: var(--text) !important;
+            overflow: hidden !important;
         }
 
         div[data-baseweb="select"] > div:hover,
-        div[data-baseweb="input"] > div:hover,
+        div[data-baseweb="input"]:hover,
         textarea:hover {
             border-color: rgba(34, 211, 238, 0.42) !important;
         }
 
         div[data-baseweb="select"] > div:focus-within,
-        div[data-baseweb="input"] > div:focus-within,
+        div[data-baseweb="input"]:focus-within,
         textarea:focus {
             border-color: var(--secondary) !important;
-            box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.48) !important;
+            box-shadow: none !important;
             outline: none !important;
         }
 
+        div[data-baseweb="input"] > div,
+        div[data-baseweb="input"] > div > div,
+        div[data-baseweb="input"] [data-baseweb="base-input"],
         div[data-baseweb="input"] input,
         [data-testid="stTextInput"] input,
         [data-testid="stDateInput"] input,
         textarea {
             background: transparent !important;
             border: 0 !important;
+            border-radius: 0 !important;
             box-shadow: none !important;
             outline: none !important;
             color: var(--text) !important;
