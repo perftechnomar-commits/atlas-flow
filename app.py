@@ -1542,13 +1542,10 @@ def main() -> None:
 
     selected_start, selected_end = render_date_slicer(long_df)
 
-    report_type_options = available_report_types(long_df)
-    selected_report_types = st.sidebar.multiselect(
-        "Report types to include",
-        options=report_type_options,
-        default=report_type_options,
-        help="Leave all selected to include the full report-type range.",
-    )
+    # ReportType is no longer a separate sidebar filter.
+    # It is handled together with all other displayed columns inside
+    # "Filters for displayed columns" to keep one unified filter section.
+    selected_report_types: list[str] = []
 
     filtered_long_for_options = filter_long_data(
         long_df,
