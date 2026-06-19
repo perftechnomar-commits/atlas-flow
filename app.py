@@ -545,7 +545,7 @@ def require_dashboard_password() -> None:
         """
         <div class="dashboard-hero">
             <div class="eyebrow">Secure access</div>
-            <h1 class="dashboard-title">AtlasFlow</h1>
+            <h1 class="dashboard-title">Atlas Flow</h1>
             <div class="dashboard-subtitle">Enter your dashboard password to continue.</div>
         </div>
         """,
