@@ -68,6 +68,64 @@ DEFAULT_DISPLAY_IDENTITY_COLUMNS = [
     "StateName",
 ]
 
+# Derived calculation setup. These columns are calculated from the same Marorka
+# source values used in the Performance KPIs app, but are exposed here as normal
+# AtlasFlow variables that can be selected, displayed, filtered, summarized, and exported.
+DERIVED_VALUE_ALIASES = {
+    "Engine Distance [nm]": [
+        "Engine Distance [nm]",
+    ],
+    "Distance Over Ground [nm]": [
+        "Distance Over Ground [nm]",
+    ],
+    "Power from Torque Meter [kW]": [
+        "Power from Torque Meter [kW]",
+        "Total Shaft Power [kW] (kW)",
+        "Total Shaft Power [kW]",
+    ],
+    "Main Engine - HSHFO": ["Main Engine - HSHFO"],
+    "Main Engine - HSLFO": ["Main Engine - HSLFO"],
+    "Main Engine - MGO": ["Main Engine - MGO"],
+    "Main Engine - ULSHFO": ["Main Engine - ULSHFO"],
+    "Main Engine - ULSLFO": ["Main Engine - ULSLFO"],
+    "Main Engine - VLSHFO": ["Main Engine - VLSHFO"],
+    "Main Engine - VLSLFO": ["Main Engine - VLSLFO"],
+    "Boiler - HSHFO": ["Boiler - HSHFO"],
+    "Boiler - HSLFO": ["Boiler - HSLFO"],
+    "Boiler - MGO": ["Boiler - MGO"],
+    "Boiler - ULSHFO": ["Boiler - ULSHFO"],
+    "Boiler - ULSLFO": ["Boiler - ULSLFO"],
+    "Boiler - VLSHFO": ["Boiler - VLSHFO"],
+    "Boiler - VLSLFO": ["Boiler - VLSLFO"],
+}
+
+ME_FUEL_COLUMNS = [
+    "Main Engine - HSHFO",
+    "Main Engine - HSLFO",
+    "Main Engine - MGO",
+    "Main Engine - ULSHFO",
+    "Main Engine - ULSLFO",
+    "Main Engine - VLSHFO",
+    "Main Engine - VLSLFO",
+]
+
+BOILER_FUEL_COLUMNS = [
+    "Boiler - HSHFO",
+    "Boiler - HSLFO",
+    "Boiler - MGO",
+    "Boiler - ULSHFO",
+    "Boiler - ULSLFO",
+    "Boiler - VLSHFO",
+    "Boiler - VLSLFO",
+]
+
+DERIVED_VARIABLES = [
+    "Calculated Slip",
+    "Consumption ME 24 Hours [MT]",
+    "SFOC [gr/Kwh]",
+    "Boiler Sum",
+]
+
 VESSEL_GROUPS = {
     "Fleet 1": ["ATETI", "CMA CGM THALASSA", "CZECH", "DOLPHIN II", "GSL CHRISTEL ELISABETH", "GSL VINIA", "ORCA I", "MYNY", "SYDNEY EXPRESS"],
     "Fleet 2": ["AGIOS DIMITRIOS", "ELENI T", "MAIRA", "MELINA", "NEWYORKER", "NIKOLAS", "TORRANCE"],
@@ -767,43 +825,147 @@ def filter_long_data(
     return filtered
 
 
+def safe_divide(numerator: Any, denominator: Any) -> Any:
+    numerator = pd.to_numeric(numerator, errors="coerce")
+    denominator = pd.to_numeric(denominator, errors="coerce")
+    denominator = denominator.mask(denominator == 0)
+    return numerator / denominator
+
+
+def sum_numeric_columns(df: pd.DataFrame, columns: list[str]) -> pd.Series:
+    available_columns = [column for column in columns if column in df.columns]
+    if not available_columns:
+        return pd.Series(pd.NA, index=df.index, dtype="Float64")
+    return df[available_columns].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+
+
+def calculation_alias_to_column() -> dict[str, str]:
+    return {
+        normalize_text(alias): column
+        for column, aliases in DERIVED_VALUE_ALIASES.items()
+        for alias in aliases
+    }
+
+
+def build_calculation_source_table(filtered_long_df: pd.DataFrame) -> pd.DataFrame:
+    if filtered_long_df.empty:
+        return pd.DataFrame(columns=PIVOT_IDENTITY_COLUMNS)
+
+    alias_to_column = calculation_alias_to_column()
+    source_long = filtered_long_df.copy()
+    source_long["_value_key"] = source_long["ValueDescription"].map(normalize_text)
+    source_long = source_long[
+        source_long["_value_key"].isin(alias_to_column)
+        & source_long["ParsedValue"].notna()
+    ].copy()
+
+    if source_long.empty:
+        return filtered_long_df[PIVOT_IDENTITY_COLUMNS].drop_duplicates().copy()
+
+    source_long["_canonical_column"] = source_long["_value_key"].map(alias_to_column)
+    source_long["_source_order"] = range(len(source_long))
+    source_long = source_long.sort_values("_source_order")
+    source_long = source_long.drop_duplicates(
+        [*PIVOT_IDENTITY_COLUMNS, "_canonical_column"],
+        keep="last",
+    )
+
+    source_table = (
+        source_long
+        .pivot(index=PIVOT_IDENTITY_COLUMNS, columns="_canonical_column", values="ParsedValue")
+        .reset_index()
+    )
+    source_table.columns.name = None
+    return source_table
+
+
+def add_performance_calculations(pivot_df: pd.DataFrame, source_table: pd.DataFrame) -> pd.DataFrame:
+    if pivot_df.empty:
+        for column in DERIVED_VARIABLES:
+            if column not in pivot_df.columns:
+                pivot_df[column] = pd.NA
+        return pivot_df
+
+    df = pivot_df.copy()
+    if not source_table.empty:
+        calculation_columns = [
+            column for column in source_table.columns
+            if column not in PIVOT_IDENTITY_COLUMNS and column not in df.columns
+        ]
+        if calculation_columns:
+            df = df.merge(
+                source_table[[*PIVOT_IDENTITY_COLUMNS, *calculation_columns]],
+                on=PIVOT_IDENTITY_COLUMNS,
+                how="left",
+            )
+
+    lap_time = pd.to_numeric(df.get("LapTime"), errors="coerce")
+    engine_distance = pd.to_numeric(df.get("Engine Distance [nm]"), errors="coerce")
+    distance_over_ground = pd.to_numeric(df.get("Distance Over Ground [nm]"), errors="coerce")
+    power = pd.to_numeric(df.get("Power from Torque Meter [kW]"), errors="coerce")
+
+    df["Calculated Slip"] = (1 - safe_divide(distance_over_ground, engine_distance)).round(3)
+
+    me_sum = sum_numeric_columns(df, ME_FUEL_COLUMNS)
+    df["Consumption ME 24 Hours [MT]"] = safe_divide(me_sum * 24, lap_time).round(3)
+
+    df["SFOC [gr/Kwh]"] = (
+        safe_divide(df["Consumption ME 24 Hours [MT]"], power) / 0.000024
+    ).round(3).fillna(0)
+
+    df["Boiler Sum"] = sum_numeric_columns(df, BOILER_FUEL_COLUMNS).round(3)
+    return df
+
+
 @st.cache_data(show_spinner=False)
 def build_pivot_table(filtered_long_df: pd.DataFrame, selected_variables: tuple[str, ...]) -> pd.DataFrame:
     if filtered_long_df.empty:
         return pd.DataFrame(columns=PIVOT_IDENTITY_COLUMNS + list(selected_variables))
 
-    if not selected_variables:
-        return (
+    calculation_source_table = build_calculation_source_table(filtered_long_df)
+
+    api_selected_variables = [
+        variable for variable in selected_variables
+        if variable not in DERIVED_VARIABLES
+    ]
+
+    if not api_selected_variables:
+        pivot_df = (
             filtered_long_df[PIVOT_IDENTITY_COLUMNS]
             .drop_duplicates()
             .sort_values(["ShipName", "EndDateTimeGMT"], ascending=[True, False])
             .reset_index(drop=True)
         )
+    else:
+        selected_long = filtered_long_df[
+            filtered_long_df["ValueDescription"].astype("string").isin(api_selected_variables)
+        ].copy()
 
-    selected_long = filtered_long_df[
-        filtered_long_df["ValueDescription"].astype("string").isin(list(selected_variables))
-    ].copy()
+        if selected_long.empty:
+            pivot_df = filtered_long_df[PIVOT_IDENTITY_COLUMNS].drop_duplicates().copy()
+            for variable in api_selected_variables:
+                pivot_df[variable] = pd.NA
+        else:
+            selected_long["ValueDescription"] = selected_long["ValueDescription"].astype(str)
+            selected_long["_source_order"] = range(len(selected_long))
+            selected_long = selected_long.sort_values("_source_order")
+            selected_long = selected_long.drop_duplicates(
+                [*PIVOT_IDENTITY_COLUMNS, "ValueDescription"],
+                keep="last",
+            )
 
-    if selected_long.empty:
-        base = filtered_long_df[PIVOT_IDENTITY_COLUMNS].drop_duplicates().copy()
-        for variable in selected_variables:
-            base[variable] = pd.NA
-        return base.sort_values(["ShipName", "EndDateTimeGMT"], ascending=[True, False]).reset_index(drop=True)
+            pivot_df = (
+                selected_long
+                .pivot(index=PIVOT_IDENTITY_COLUMNS, columns="ValueDescription", values="ParsedValue")
+                .reset_index()
+            )
+            pivot_df.columns.name = None
 
-    selected_long["ValueDescription"] = selected_long["ValueDescription"].astype(str)
-    selected_long["_source_order"] = range(len(selected_long))
-    selected_long = selected_long.sort_values("_source_order")
-    selected_long = selected_long.drop_duplicates(
-        [*PIVOT_IDENTITY_COLUMNS, "ValueDescription"],
-        keep="last",
-    )
+        for variable in api_selected_variables:
+            if variable not in pivot_df.columns:
+                pivot_df[variable] = pd.NA
 
-    pivot_df = (
-        selected_long
-        .pivot(index=PIVOT_IDENTITY_COLUMNS, columns="ValueDescription", values="ParsedValue")
-        .reset_index()
-    )
-    pivot_df.columns.name = None
+    pivot_df = add_performance_calculations(pivot_df, calculation_source_table)
 
     for variable in selected_variables:
         if variable not in pivot_df.columns:
@@ -1310,7 +1472,7 @@ def main() -> None:
             st.error(str(exc))
             st.stop()
 
-    prepare_signature = {**raw_signature, "prepare_version": "atlasflow_dynamic_pivot_v1"}
+    prepare_signature = {**raw_signature, "prepare_version": "atlasflow_dynamic_pivot_v2_calculations"}
     current_prepare_signature = st.session_state.get("loaded_prepare_signature")
     raw_df = st.session_state.get("loaded_raw_df")
     long_df = st.session_state.get("loaded_long_df")
@@ -1359,7 +1521,10 @@ def main() -> None:
         selected_end=selected_end,
     )
 
-    variable_options = available_variables(filtered_long_for_options)
+    variable_options = sorted(
+        set(available_variables(filtered_long_for_options)).union(DERIVED_VARIABLES),
+        key=str.casefold,
+    )
     st.sidebar.markdown("### Pivot variables")
     previous_selected_variables = st.session_state.get("atlas_selected_variables", [])
     if not isinstance(previous_selected_variables, list):
