@@ -61,11 +61,6 @@ PIVOT_IDENTITY_COLUMNS = [
 
 DEFAULT_DISPLAY_IDENTITY_COLUMNS = [
     "ShipName",
-    "ReportType",
-    "StartDateTimeGMT",
-    "EndDateTimeGMT",
-    "LapTime",
-    "StateName",
 ]
 
 # Derived calculation setup. These columns are calculated from the same Marorka
@@ -1579,10 +1574,10 @@ def main() -> None:
     )
 
     identity_columns = st.sidebar.multiselect(
-        "Report identity columns",
+        "Pivot rows",
         options=PIVOT_IDENTITY_COLUMNS,
         default=DEFAULT_DISPLAY_IDENTITY_COLUMNS,
-        help="These fixed report fields appear before the selected variable columns.",
+        help="Choose the report fields used as row identifiers before the selected variable columns.",
     )
     if not identity_columns:
         identity_columns = DEFAULT_DISPLAY_IDENTITY_COLUMNS
