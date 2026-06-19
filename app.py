@@ -27,7 +27,6 @@ from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 
 APP_TITLE = "AtlasFlow"
 APP_DIR = Path(__file__).resolve().parent
-DEFAULT_BACKGROUND_IMAGE = APP_DIR / "mantalos-nikolic-960x540.webp"
 ODATA_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 MAX_ODATA_PAGES = 250
 API_CACHE_TTL_SECONDS = 21600  # 6 hours
@@ -95,26 +94,25 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 
 def apply_custom_css() -> None:
-    background_image_url = dashboard_background_image_url()
-    background_image_layer = dashboard_background_image_layer(background_image_url)
-
+    
     st.markdown(
         """
         <style>
         :root {
-            --bg: #08111F;
-            --panel: #101B2D;
-            --panel-soft: #152238;
-            --border: rgba(0, 209, 255, 0.24);
-            --text-soft: #AAB6C8;
-            --cyan: #00D1FF;
-            --green: #4F8CFF;
+            --bg: #090A1A;
+            --panel: #12152B;
+            --panel-soft: #191D3A;
+            --border: rgba(139, 92, 246, 0.34);
+            --text-soft: #B8C0D9;
+            --primary: #8B5CF6;
+            --secondary: #22D3EE;
+            --accent: #A78BFA;
         }
 
         .stApp {
             background:
                 __BACKGROUND_IMAGE_LAYER__
-                radial-gradient(circle at top left, rgba(255, 216, 74, 0.13), transparent 34rem),
+                radial-gradient(circle at top left, rgba(139, 92, 246, 0.34), transparent 34rem),
                 radial-gradient(circle at top right, rgba(255, 176, 0, 0.10), transparent 30rem),
                 linear-gradient(180deg, rgba(255, 216, 74, 0.04), transparent 22rem),
                 var(--bg);
