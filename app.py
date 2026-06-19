@@ -29,9 +29,35 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 APP_TITLE = "AtlasFlow"
 APP_DIR = Path(__file__).resolve().parent
 SNAPSHOT_DIR = APP_DIR / ".atlasflow_cache"
-RAW_SNAPSHOT_FILE = SNAPSHOT_DIR / "atlasflow_raw.pkl"
-METADATA_SNAPSHOT_FILE = SNAPSHOT_DIR / "atlasflow_metadata.json"
+RAW_SNAPSHOT_FILE = SNAPSHOT_DIR / "reportdata_raw.pkl"
+METADATA_SNAPSHOT_FILE = SNAPSHOT_DIR / "reportdata_metadata.json"
 ODATA_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
+REPORTPIVOTS_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportPivots"
+SHIPPIVOTS_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ShipPivots"
+
+SOURCE_CONFIGS = {
+    "reportdata": {
+        "label": "ReportData",
+        "endpoint": ODATA_ENDPOINT,
+        "snapshot_file": SNAPSHOT_DIR / "reportdata_raw.pkl",
+        "metadata_file": SNAPSHOT_DIR / "reportdata_metadata.json",
+        "datetime_candidates": ["StartDateTimeGMT", "DateTime", "dateTime", "Timestamp"],
+    },
+    "reportpivots": {
+        "label": "ReportPivots",
+        "endpoint": REPORTPIVOTS_ENDPOINT,
+        "snapshot_file": SNAPSHOT_DIR / "reportpivots_raw.pkl",
+        "metadata_file": SNAPSHOT_DIR / "reportpivots_metadata.json",
+        "datetime_candidates": ["DateTime", "StartDateTimeGMT", "ReportDateTime", "Timestamp"],
+    },
+    "shippivots": {
+        "label": "ShipPivots",
+        "endpoint": SHIPPIVOTS_ENDPOINT,
+        "snapshot_file": SNAPSHOT_DIR / "shippivots_raw.pkl",
+        "metadata_file": SNAPSHOT_DIR / "shippivots_metadata.json",
+        "datetime_candidates": ["DateTime", "StartDateTimeGMT", "Timestamp"],
+    },
+}
 MAX_ODATA_PAGES = 250
 API_CACHE_TTL_SECONDS = 21600  # 6 hours
 API_FULL_START_DATE = date(2026, 1, 1)
@@ -699,6 +725,275 @@ def cached_fetch_report_data(
     start_date: date,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     return fetch_report_data(username, password, token, auth_method, start_date)
+
+
+# =============================================================================
+# Multi-source wide OData helpers
+# =============================================================================
+
+
+def build_wide_odata_url(endpoint: str, start_date: date, datetime_column: str = "DateTime") -> str:
+    start_text = start_date.strftime("%Y-%m-%d")
+    params = {"$filter": f"{datetime_column} gt DateTime'{start_text}'"}
+    return f"{endpoint}?{urlencode(params)}"
+
+
+def fetch_wide_odata_source(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    start_date: date,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    config = SOURCE_CONFIGS[source_key]
+    endpoint = str(config["endpoint"])
+    datetime_column = str(config.get("datetime_candidates", ["DateTime"])[0])
+    next_url = build_wide_odata_url(endpoint, start_date, datetime_column)
+    first_url = next_url
+    seen_urls: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    pages = 0
+    total_bytes = 0
+    started_at = time.perf_counter()
+    auth = request_auth(username, password, auth_method)
+    headers = request_headers(token, auth_method)
+
+    with requests.Session() as session:
+        session.headers.update(headers)
+        for _ in range(MAX_ODATA_PAGES):
+            if next_url in seen_urls:
+                break
+            seen_urls.add(next_url)
+            response = session.get(next_url, auth=auth, timeout=90)
+            total_bytes += len(response.content)
+            response.raise_for_status()
+            pages += 1
+            page_rows, next_link = extract_odata_page(response.json())
+            rows.extend(page_rows)
+            if not next_link:
+                break
+            next_url = urljoin(next_url, next_link)
+
+    df = pd.DataFrame(rows)
+    if "__metadata" in df.columns:
+        df = df.drop(columns=["__metadata"])
+
+    loaded_at_utc = datetime.now(timezone.utc)
+    metadata = {
+        "source": config["label"],
+        "endpoint": endpoint,
+        "loaded_at_utc": loaded_at_utc.strftime("%d-%m-%Y %H:%M:%S UTC"),
+        "loaded_at_local": local_time_label(loaded_at_utc),
+        "loaded_start_date": start_date.isoformat(),
+        "rows": int(len(df)),
+        "columns": int(len(df.columns)),
+        "pages": pages,
+        "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
+        "fetch_seconds": round(time.perf_counter() - started_at, 2),
+        "first_url": first_url,
+        "hit_page_limit": pages >= MAX_ODATA_PAGES,
+    }
+    return df, metadata
+
+
+@st.cache_data(ttl=API_CACHE_TTL_SECONDS, show_spinner=False)
+def cached_fetch_wide_odata_source(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    start_date: date,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    return fetch_wide_odata_source(source_key, username, password, token, auth_method, start_date)
+
+
+def source_signature(source_key: str, username: str, auth_method: str, start_date: date) -> dict[str, Any]:
+    config = SOURCE_CONFIGS[source_key]
+    return {
+        "source": source_key,
+        "endpoint": str(config["endpoint"]),
+        "username_hash": sha256(username.encode("utf-8")).hexdigest()[:12],
+        "auth_method": auth_method.lower(),
+        "start_date": start_date.isoformat(),
+    }
+
+
+def save_source_snapshot(source_key: str, df: pd.DataFrame, metadata: dict[str, Any], signature: dict[str, Any]) -> None:
+    try:
+        config = SOURCE_CONFIGS[source_key]
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        df.to_pickle(config["snapshot_file"])
+        payload = {
+            "metadata": metadata,
+            "signature": signature,
+            "saved_at_utc": datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M:%S UTC"),
+        }
+        Path(config["metadata_file"]).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        return
+
+
+def load_source_snapshot(
+    source_key: str,
+    requested_signature: dict[str, Any],
+    requested_start_date: date,
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]] | None:
+    try:
+        config = SOURCE_CONFIGS[source_key]
+        snapshot_file = Path(config["snapshot_file"])
+        metadata_file = Path(config["metadata_file"])
+        if not snapshot_file.is_file() or not metadata_file.is_file():
+            return None
+        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+        metadata = payload.get("metadata") or {}
+        signature = payload.get("signature") or {}
+        if not raw_data_covers_request(signature, metadata, requested_signature, requested_start_date):
+            return None
+        df = pd.read_pickle(snapshot_file)
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return None
+        metadata = metadata.copy()
+        metadata["loaded_from_snapshot"] = True
+        metadata.setdefault("snapshot_saved_at_utc", payload.get("saved_at_utc", "-"))
+        return df, metadata, signature
+    except Exception:
+        return None
+
+
+def parse_wide_source_datetimes(df: pd.DataFrame) -> pd.DataFrame:
+    parsed_df = df.copy()
+    for column in parsed_df.columns:
+        if "date" in str(column).lower() or "time" in str(column).lower():
+            parsed = parse_datetime_series(parsed_df[column])
+            if parsed.notna().any():
+                parsed_df[column] = parsed
+    return parsed_df
+
+
+def detect_datetime_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for column in candidates:
+        if column in df.columns:
+            return column
+    for column in df.columns:
+        lower = str(column).lower()
+        if "datetime" in lower or lower in {"date", "timestamp"}:
+            return column
+    return None
+
+
+def filter_wide_source_data(
+    df: pd.DataFrame,
+    source_key: str,
+    selected_vessels: list[str],
+    selected_start: date,
+    selected_end: date,
+) -> pd.DataFrame:
+    if df.empty:
+        return df
+    filtered = parse_wide_source_datetimes(df)
+    if "ShipName" in filtered.columns and selected_vessels:
+        filtered = filtered[match_selected_vessels(filtered["ShipName"], selected_vessels)].copy()
+    datetime_column = detect_datetime_column(filtered, list(SOURCE_CONFIGS[source_key].get("datetime_candidates", [])))
+    if datetime_column and datetime_column in filtered.columns:
+        values = pd.to_datetime(filtered[datetime_column], errors="coerce", utc=True)
+        start_timestamp = pd.Timestamp(selected_start, tz="UTC")
+        end_timestamp = pd.Timestamp(selected_end + timedelta(days=1), tz="UTC")
+        filtered = filtered[values.ge(start_timestamp) & values.lt(end_timestamp)].copy()
+    return filtered
+
+
+def load_or_fetch_source(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    start_date: date,
+    refresh: bool,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    sig = source_signature(source_key, username, auth_method, start_date)
+    state_df_key = f"loaded_{source_key}_df"
+    state_meta_key = f"loaded_{source_key}_metadata"
+    state_sig_key = f"loaded_{source_key}_signature"
+    df = st.session_state.get(state_df_key)
+    metadata = st.session_state.get(state_meta_key)
+    current_signature = st.session_state.get(state_sig_key)
+
+    needs_load = (
+        refresh
+        or not isinstance(df, pd.DataFrame)
+        or not isinstance(metadata, dict)
+        or not raw_data_covers_request(current_signature, metadata, sig, start_date)
+    )
+
+    if needs_load and not refresh:
+        snapshot = load_source_snapshot(source_key, sig, start_date)
+        if snapshot is not None:
+            df, metadata, snapshot_sig = snapshot
+            st.session_state[state_df_key] = df
+            st.session_state[state_meta_key] = metadata
+            st.session_state[state_sig_key] = snapshot_sig
+            needs_load = False
+
+    if needs_load:
+        if refresh:
+            cached_fetch_wide_odata_source.clear()
+        df, metadata = cached_fetch_wide_odata_source(source_key, username, password, token, auth_method, start_date)
+        save_source_snapshot(source_key, df, metadata, sig)
+        st.session_state[state_df_key] = df
+        st.session_state[state_meta_key] = metadata
+        st.session_state[state_sig_key] = sig
+
+    return st.session_state[state_df_key], st.session_state[state_meta_key]
+
+
+def render_wide_source_tab(source_label: str, df: pd.DataFrame, metadata: dict[str, Any], source_key: str, selected_vessels: list[str], selected_start: date, selected_end: date) -> pd.DataFrame:
+    st.markdown(f'<div class="section-title">{escape(source_label)} Dataset</div>', unsafe_allow_html=True)
+    render_api_load_caption(metadata)
+    filtered_df = filter_wide_source_data(df, source_key, selected_vessels, selected_start, selected_end)
+    cols = st.columns(4)
+    cols[0].metric("Rows", f"{len(filtered_df):,}")
+    cols[1].metric("Columns", f"{len(filtered_df.columns):,}")
+    cols[2].metric("API rows", f"{metadata.get('rows', len(df)):,}")
+    cols[3].metric("API pages", f"{metadata.get('pages', 0):,}")
+
+    default_columns = [c for c in ["ShipName", "DateTime", "State", "StateName", "GPSSpeed", "LogSpeed", "MEConsumed", "ShaftPower"] if c in filtered_df.columns]
+    if not default_columns:
+        default_columns = list(filtered_df.columns[: min(12, len(filtered_df.columns))])
+    selected_columns = st.multiselect(
+        f"{source_label} columns to preview/export",
+        options=list(filtered_df.columns),
+        default=default_columns,
+        key=f"{source_key}_preview_columns",
+    )
+    if not selected_columns:
+        selected_columns = default_columns
+    output = filtered_df[selected_columns].copy() if selected_columns else filtered_df.copy()
+    st.dataframe(format_display_dataframe(output.head(TABLE_PREVIEW_ROW_LIMIT)), use_container_width=True, hide_index=True)
+    if len(output) > TABLE_PREVIEW_ROW_LIMIT:
+        st.caption(f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of {len(output):,} rows. Export includes all filtered rows/columns selected above.")
+    return output
+
+
+@st.cache_data(show_spinner=False)
+def to_multisource_excel_bytes(
+    reportdata_df: pd.DataFrame,
+    reportdata_summary_df: pd.DataFrame | None,
+    reportpivots_df: pd.DataFrame,
+    shippivots_df: pd.DataFrame,
+) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        write_table_sheet(writer, reportdata_df, "ReportData Clean", "ReportDataClean")
+        if reportdata_summary_df is not None and not reportdata_summary_df.empty:
+            write_table_sheet(writer, reportdata_summary_df, "ReportData Summary", "ReportDataSummary")
+        if reportpivots_df is not None and not reportpivots_df.empty:
+            write_table_sheet(writer, reportpivots_df, "ReportPivots", "ReportPivotsData")
+        if shippivots_df is not None and not shippivots_df.empty:
+            write_table_sheet(writer, shippivots_df, "ShipPivots", "ShipPivotsData")
+    return output.getvalue()
 
 
 # =============================================================================
@@ -1380,48 +1675,35 @@ def selected_vessel_controls() -> tuple[str, list[str]]:
 
     if selected_group == "All fleets":
         group_vessels = VESSEL_OPTIONS
-        all_label = "Include all vessels"
     else:
         group_vessels = VESSEL_GROUPS[selected_group]
-        all_label = "Include all vessels in this fleet"
-
-    include_all_key = f"atlas_include_all_vessels_{normalize_text(selected_group)}"
-    include_all_vessels = st.sidebar.checkbox(
-        all_label,
-        value=True,
-        key=include_all_key,
-        help="Keep this enabled to include every vessel in the selected fleet/group without filling the selector with tags.",
-    )
-
-    if include_all_vessels:
-        st.sidebar.caption(f"Using all {len(group_vessels):,} vessels in {selected_group}.")
-        return selected_group, list(group_vessels)
 
     vessel_key = "atlas_selected_vessels"
-    previous_vessels = st.session_state.get(vessel_key, [])
+    previous_vessels = st.session_state.get(vessel_key, group_vessels)
     if not isinstance(previous_vessels, list):
-        previous_vessels = []
-    valid_previous_vessels = [vessel for vessel in previous_vessels if vessel in group_vessels]
-    if valid_previous_vessels != previous_vessels:
-        st.session_state[vessel_key] = valid_previous_vessels
+        previous_vessels = group_vessels
+    valid_default_vessels = [vessel for vessel in previous_vessels if vessel in group_vessels]
+    if not valid_default_vessels:
+        valid_default_vessels = group_vessels
+    if valid_default_vessels != previous_vessels:
+        st.session_state[vessel_key] = valid_default_vessels
 
     vessels = st.sidebar.multiselect(
         "Vessels to include",
         options=group_vessels,
-        default=valid_previous_vessels,
+        default=valid_default_vessels,
         key=vessel_key,
-        help="This controls the displayed pivot table only. The API data is loaded broadly.",
+        help="This controls the displayed datasets only. The API data is loaded broadly.",
     )
 
     if not vessels:
         st.sidebar.caption("No vessels selected manually, so all vessels in this fleet group are included.")
-        vessels = list(group_vessels)
+        vessels = group_vessels
 
     return selected_group, list(vessels)
 
-
 def sidebar_refresh_control() -> bool:
-    refresh_requested = st.sidebar.button("Refresh API data", use_container_width=False)
+    refresh_requested = st.sidebar.button("Refresh all APIs", use_container_width=False)
     if refresh_requested:
         st.session_state["confirm_api_refresh"] = True
 
@@ -1431,7 +1713,7 @@ def sidebar_refresh_control() -> bool:
         last_load = metadata.get("loaded_at_local") or metadata.get("loaded_at_utc") or "-"
         last_load_display = str(last_load).replace(" EEST", "").replace(" EET", "")
         st.sidebar.warning(
-            "Refresh will call the API and may take a while.\n\n"
+            "Refresh will call all AtlasFlow APIs and may take a while.\n\n"
             f"Last updated data was on: {last_load_display} LT"
         )
         col1, col2 = st.sidebar.columns(2)
@@ -1496,6 +1778,14 @@ def run_warmup_if_requested() -> None:
             warmup_signature = request_signature(username, auth_method, start_date)
             save_raw_snapshot(raw_df, metadata, warmup_signature)
             long_df = cached_prepare_long_data(raw_df)
+            warmed_sources = {"ReportData": int(len(raw_df))}
+            for source_key in ["reportpivots", "shippivots"]:
+                source_df, source_metadata = cached_fetch_wide_odata_source(
+                    source_key, username, password, token, auth_method, start_date
+                )
+                source_sig = source_signature(source_key, username, auth_method, start_date)
+                save_source_snapshot(source_key, source_df, source_metadata, source_sig)
+                warmed_sources[str(SOURCE_CONFIGS[source_key]["label"])] = int(len(source_df))
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
         st.error(f"Warmup failed: Marorka API request failed with status {status}.")
@@ -1511,6 +1801,7 @@ def run_warmup_if_requested() -> None:
             "compact_api_rows": int(len(raw_df)),
             "long_rows": int(len(long_df)),
             "available_variables": int(long_df["ValueDescription"].nunique()) if "ValueDescription" in long_df.columns else 0,
+            "warmed_sources": warmed_sources,
             "force_refresh": get_query_param("force", "0") == "1",
         }
     )
@@ -1622,6 +1913,13 @@ def main() -> None:
 
     selected_start, selected_end = render_date_slicer(long_df)
 
+    reportpivots_df, reportpivots_metadata = load_or_fetch_source(
+        "reportpivots", username, password, token, auth_method, api_start_date, refresh
+    )
+    shippivots_df, shippivots_metadata = load_or_fetch_source(
+        "shippivots", username, password, token, auth_method, api_start_date, refresh
+    )
+
     # ReportType is no longer a separate sidebar filter.
     # It is handled together with all other displayed columns inside
     # "Filters for displayed columns" to keep one unified filter section.
@@ -1704,7 +2002,7 @@ def main() -> None:
 
     output_df = filtered_pivot_df[display_columns].copy()
 
-    tab_table, tab_diagnostics, tab_raw = st.tabs(["Pivot Table", "API Diagnostics", "Long Data"])
+    tab_table, tab_reportpivots, tab_shippivots, tab_export, tab_diagnostics, tab_raw = st.tabs(["ReportData Explorer", "ReportPivots", "ShipPivots", "Export Center", "API Diagnostics", "Long Data"])
 
     if metadata.get("hit_page_limit"):
         st.warning(
@@ -1861,6 +2159,78 @@ def main() -> None:
             )
         else:
             st.caption("Excel generation is prepared on demand so normal dashboard loads stay faster.")
+
+    with tab_reportpivots:
+        reportpivots_output_df = render_wide_source_tab(
+            "ReportPivots",
+            reportpivots_df,
+            reportpivots_metadata,
+            "reportpivots",
+            selected_vessels,
+            selected_start,
+            selected_end,
+        )
+
+    with tab_shippivots:
+        shippivots_output_df = render_wide_source_tab(
+            "ShipPivots",
+            shippivots_df,
+            shippivots_metadata,
+            "shippivots",
+            selected_vessels,
+            selected_start,
+            selected_end,
+        )
+
+    with tab_export:
+        st.markdown('<div class="section-title">AtlasFlow Export Center</div>', unsafe_allow_html=True)
+        st.caption("Prepare a single workbook with ReportData, ReportPivots, and ShipPivots sheets from the current fleet/period selections.")
+        export_cols = st.columns(3)
+        export_cols[0].metric("ReportData rows", f"{len(output_df):,}")
+        export_cols[1].metric("ReportPivots rows", f"{len(reportpivots_output_df):,}")
+        export_cols[2].metric("ShipPivots rows", f"{len(shippivots_output_df):,}")
+
+        multisource_signature_payload = "|".join([
+            current_export_signature,
+            str(len(reportpivots_output_df)),
+            str(len(shippivots_output_df)),
+            ",".join(reportpivots_output_df.columns.astype(str).tolist()) if not reportpivots_output_df.empty else "no_reportpivots",
+            ",".join(shippivots_output_df.columns.astype(str).tolist()) if not shippivots_output_df.empty else "no_shippivots",
+        ])
+        multisource_signature = sha256(multisource_signature_payload.encode("utf-8")).hexdigest()
+        multisource_ready = (
+            st.session_state.get("atlas_multisource_export_signature") == multisource_signature
+            and "atlas_multisource_export_bytes" in st.session_state
+        )
+        if st.button("Prepare full AtlasFlow workbook", type="primary"):
+            with st.spinner("Preparing full AtlasFlow workbook..."):
+                summary_analysis_df = pd.DataFrame()
+                if summary_can_build:
+                    summary_analysis_df = build_summary_analysis(
+                        output_df,
+                        group_fields=summary_group_fields,
+                        value_fields=summary_value_fields,
+                        aggregation=summary_aggregation,
+                    )
+                st.session_state["atlas_multisource_export_bytes"] = to_multisource_excel_bytes(
+                    output_df,
+                    summary_analysis_df if not summary_analysis_df.empty else None,
+                    reportpivots_output_df,
+                    shippivots_output_df,
+                )
+                st.session_state["atlas_multisource_export_signature"] = multisource_signature
+                st.session_state["atlas_summary_analysis_df"] = summary_analysis_df
+                st.session_state["atlas_export_signature"] = current_export_signature
+            multisource_ready = True
+        if multisource_ready:
+            st.download_button(
+                "Download full AtlasFlow workbook",
+                data=st.session_state["atlas_multisource_export_bytes"],
+                file_name="atlasflow_full_export.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            st.caption("The full workbook is prepared on demand to keep the live app responsive.")
 
     with tab_diagnostics:
         st.markdown('<div class="section-title">Diagnostics</div>', unsafe_allow_html=True)
