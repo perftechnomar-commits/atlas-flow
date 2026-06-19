@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from html import escape
 from io import BytesIO
+import gc
 import hmac
 import json
 import os
@@ -29,7 +30,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 APP_TITLE = "AtlasFlow"
 APP_DIR = Path(__file__).resolve().parent
 SNAPSHOT_DIR = APP_DIR / ".atlasflow_cache"
-RAW_SNAPSHOT_FILE = SNAPSHOT_DIR / "reportdata_raw.pkl"
+RAW_SNAPSHOT_FILE = SNAPSHOT_DIR / "reportdata_raw.parquet"
 METADATA_SNAPSHOT_FILE = SNAPSHOT_DIR / "reportdata_metadata.json"
 ODATA_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 REPORTPIVOTS_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportPivots"
@@ -39,21 +40,21 @@ SOURCE_CONFIGS = {
     "reportdata": {
         "label": "ReportData",
         "endpoint": ODATA_ENDPOINT,
-        "snapshot_file": SNAPSHOT_DIR / "reportdata_raw.pkl",
+        "snapshot_file": SNAPSHOT_DIR / "reportdata_raw.parquet",
         "metadata_file": SNAPSHOT_DIR / "reportdata_metadata.json",
         "datetime_candidates": ["StartDateTimeGMT", "DateTime", "dateTime", "Timestamp"],
     },
     "reportpivots": {
         "label": "ReportPivots",
         "endpoint": REPORTPIVOTS_ENDPOINT,
-        "snapshot_file": SNAPSHOT_DIR / "reportpivots_raw.pkl",
+        "snapshot_file": SNAPSHOT_DIR / "reportpivots_raw.parquet",
         "metadata_file": SNAPSHOT_DIR / "reportpivots_metadata.json",
         "datetime_candidates": ["DateTime", "StartDateTimeGMT", "ReportDateTime", "Timestamp"],
     },
     "shippivots": {
         "label": "ShipPivots",
         "endpoint": SHIPPIVOTS_ENDPOINT,
-        "snapshot_file": SNAPSHOT_DIR / "shippivots_raw.pkl",
+        "snapshot_file": SNAPSHOT_DIR / "shippivots_raw.parquet",
         "metadata_file": SNAPSHOT_DIR / "shippivots_metadata.json",
         "datetime_candidates": ["DateTime", "StartDateTimeGMT", "Timestamp"],
     },
@@ -824,7 +825,7 @@ def save_source_snapshot(source_key: str, df: pd.DataFrame, metadata: dict[str, 
     try:
         config = SOURCE_CONFIGS[source_key]
         SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-        df.to_pickle(config["snapshot_file"])
+        df.to_parquet(config["snapshot_file"], index=False)
         payload = {
             "metadata": metadata,
             "signature": signature,
@@ -851,7 +852,7 @@ def load_source_snapshot(
         signature = payload.get("signature") or {}
         if not raw_data_covers_request(signature, metadata, requested_signature, requested_start_date):
             return None
-        df = pd.read_pickle(snapshot_file)
+        df = pd.read_parquet(snapshot_file)
         if not isinstance(df, pd.DataFrame) or df.empty:
             return None
         metadata = metadata.copy()
@@ -912,6 +913,7 @@ def load_or_fetch_source(
     auth_method: str,
     start_date: date,
     refresh: bool,
+    auto_fetch: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     sig = source_signature(source_key, username, auth_method, start_date)
     state_df_key = f"loaded_{source_key}_df"
@@ -937,10 +939,26 @@ def load_or_fetch_source(
             st.session_state[state_sig_key] = snapshot_sig
             needs_load = False
 
+    if needs_load and not (refresh or auto_fetch):
+        config = SOURCE_CONFIGS[source_key]
+        empty_metadata = {
+            "source": config["label"],
+            "endpoint": str(config["endpoint"]),
+            "loaded_at_utc": "-",
+            "loaded_at_local": "No stored snapshot yet",
+            "loaded_from_snapshot": False,
+            "rows": 0,
+            "columns": 0,
+            "pages": 0,
+            "first_url": "-",
+            "needs_warmup": True,
+        }
+        return pd.DataFrame(), empty_metadata
+
     if needs_load:
         if refresh:
             cached_fetch_wide_odata_source.clear()
-        df, metadata = cached_fetch_wide_odata_source(source_key, username, password, token, auth_method, start_date)
+        df, metadata = fetch_wide_odata_source(source_key, username, password, token, auth_method, start_date)
         save_source_snapshot(source_key, df, metadata, sig)
         st.session_state[state_df_key] = df
         st.session_state[state_meta_key] = metadata
@@ -1624,7 +1642,7 @@ def save_raw_snapshot(raw_df: pd.DataFrame, metadata: dict[str, Any], signature:
     """Persist the latest successful raw API pull as a local fallback after app restarts."""
     try:
         SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-        raw_df.to_pickle(RAW_SNAPSHOT_FILE)
+        raw_df.to_parquet(RAW_SNAPSHOT_FILE, index=False)
         snapshot_payload = {
             "metadata": metadata,
             "signature": signature,
@@ -1649,7 +1667,7 @@ def load_raw_snapshot(
         signature = snapshot_payload.get("signature") or {}
         if not raw_data_covers_request(signature, metadata, requested_signature, requested_start_date):
             return None
-        raw_df = pd.read_pickle(RAW_SNAPSHOT_FILE)
+        raw_df = pd.read_parquet(RAW_SNAPSHOT_FILE)
         if not isinstance(raw_df, pd.DataFrame) or raw_df.empty:
             return None
         metadata = metadata.copy()
@@ -1762,30 +1780,45 @@ def run_warmup_if_requested() -> None:
     token = read_secret("MARORKA_TOKEN")
     auth_method = read_secret("MARORKA_AUTH_METHOD", "basic")
     start_date = API_FULL_START_DATE
+    requested_source = get_query_param("source", "reportdata").strip().lower()
 
     if auth_method.lower() in {"basic", "digest"} and (not username or not password):
         st.error("Warmup failed: MARORKA_USERNAME and MARORKA_PASSWORD are required.")
         st.stop()
 
+    valid_sources = {"reportdata", "reportpivots", "shippivots", "all"}
+    if requested_source not in valid_sources:
+        st.error("Invalid warmup source. Use reportdata, reportpivots, shippivots, or all.")
+        st.stop()
+
     if get_query_param("force", "0") == "1":
         cached_fetch_report_data.clear()
+        cached_fetch_wide_odata_source.clear()
         cached_prepare_long_data.clear()
         build_pivot_table.clear()
 
+    source_sequence = ["reportdata", "reportpivots", "shippivots"] if requested_source == "all" else [requested_source]
+    warmed_sources: dict[str, int] = {}
+    metadata: dict[str, Any] = {}
+
     try:
-        with st.spinner("Warming up API..."):
-            raw_df, metadata = cached_fetch_report_data(username, password, token, auth_method, start_date)
-            warmup_signature = request_signature(username, auth_method, start_date)
-            save_raw_snapshot(raw_df, metadata, warmup_signature)
-            long_df = cached_prepare_long_data(raw_df)
-            warmed_sources = {"ReportData": int(len(raw_df))}
-            for source_key in ["reportpivots", "shippivots"]:
-                source_df, source_metadata = cached_fetch_wide_odata_source(
-                    source_key, username, password, token, auth_method, start_date
-                )
-                source_sig = source_signature(source_key, username, auth_method, start_date)
-                save_source_snapshot(source_key, source_df, source_metadata, source_sig)
-                warmed_sources[str(SOURCE_CONFIGS[source_key]["label"])] = int(len(source_df))
+        with st.spinner(f"Warming up AtlasFlow source: {requested_source}..."):
+            for source_key in source_sequence:
+                if source_key == "reportdata":
+                    raw_df, metadata = fetch_report_data(username, password, token, auth_method, start_date)
+                    warmup_signature = request_signature(username, auth_method, start_date)
+                    save_raw_snapshot(raw_df, metadata, warmup_signature)
+                    warmed_sources["ReportData"] = int(len(raw_df))
+                    del raw_df
+                else:
+                    source_df, metadata = fetch_wide_odata_source(
+                        source_key, username, password, token, auth_method, start_date
+                    )
+                    source_sig = source_signature(source_key, username, auth_method, start_date)
+                    save_source_snapshot(source_key, source_df, metadata, source_sig)
+                    warmed_sources[str(SOURCE_CONFIGS[source_key]["label"])] = int(len(source_df))
+                    del source_df
+                gc.collect()
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
         st.error(f"Warmup failed: Marorka API request failed with status {status}.")
@@ -1797,16 +1830,14 @@ def run_warmup_if_requested() -> None:
     st.success("Warmup OK.")
     st.write(
         {
-            "last_api_load_local": metadata.get("loaded_at_local"),
-            "compact_api_rows": int(len(raw_df)),
-            "long_rows": int(len(long_df)),
-            "available_variables": int(long_df["ValueDescription"].nunique()) if "ValueDescription" in long_df.columns else 0,
+            "source": requested_source,
+            "last_api_load_local": metadata.get("loaded_at_local", "-"),
             "warmed_sources": warmed_sources,
+            "snapshot_format": "parquet",
             "force_refresh": get_query_param("force", "0") == "1",
         }
     )
     st.stop()
-
 
 # =============================================================================
 # Main app
