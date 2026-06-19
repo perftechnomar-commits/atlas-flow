@@ -1354,10 +1354,19 @@ def main() -> None:
 
     variable_options = available_variables(filtered_long_for_options)
     st.sidebar.markdown("### Pivot variables")
+    previous_selected_variables = st.session_state.get("atlas_selected_variables", [])
+    if not isinstance(previous_selected_variables, list):
+        previous_selected_variables = []
+
+    valid_default_variables = [
+        variable for variable in previous_selected_variables
+        if variable in variable_options
+    ]
+
     selected_variables = st.sidebar.multiselect(
         "Variables to include and filter",
         options=variable_options,
-        default=st.session_state.get("atlas_selected_variables", []),
+        default=valid_default_variables,
         key="atlas_selected_variables",
         help=(
             "Every selected ValueDescription becomes a displayed table column. "
