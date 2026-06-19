@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import base64
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from html import escape
 from io import BytesIO
 import hmac
-import mimetypes
 import os
 import re
 import time
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urljoin
 from zoneinfo import ZoneInfo
@@ -26,7 +23,6 @@ from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 # =============================================================================
 
 APP_TITLE = "AtlasFlow"
-APP_DIR = Path(__file__).resolve().parent
 ODATA_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 MAX_ODATA_PAGES = 250
 API_CACHE_TTL_SECONDS = 21600  # 6 hours
@@ -94,35 +90,41 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 
 def apply_custom_css() -> None:
-    
     st.markdown(
         """
         <style>
         :root {
             --bg: #090A1A;
+            --bg-deep: #050615;
             --panel: #12152B;
             --panel-soft: #191D3A;
+            --panel-glass: rgba(18, 21, 43, 0.74);
             --border: rgba(139, 92, 246, 0.34);
+            --border-strong: rgba(167, 139, 250, 0.56);
+            --text: #F8FAFC;
             --text-soft: #B8C0D9;
             --primary: #8B5CF6;
             --secondary: #22D3EE;
             --accent: #A78BFA;
+            --input-bg: rgba(8, 10, 28, 0.92);
         }
 
         .stApp {
             background:
-                __BACKGROUND_IMAGE_LAYER__
-                radial-gradient(circle at top left, rgba(139, 92, 246, 0.34), transparent 34rem),
-                radial-gradient(circle at top right, rgba(255, 176, 0, 0.10), transparent 30rem),
-                linear-gradient(180deg, rgba(255, 216, 74, 0.04), transparent 22rem),
+                radial-gradient(circle at top left, rgba(139, 92, 246, 0.24), transparent 34rem),
+                radial-gradient(circle at top right, rgba(34, 211, 238, 0.12), transparent 30rem),
+                linear-gradient(180deg, rgba(167, 139, 250, 0.06), transparent 24rem),
                 var(--bg);
             background-position: center center;
             background-size: cover;
             background-attachment: fixed;
+            color: var(--text);
         }
 
-        header[data-testid="stHeader"], header[data-testid="stHeader"] > div,
-        div[data-testid="stToolbar"], div[data-testid="stDecoration"] {
+        header[data-testid="stHeader"],
+        header[data-testid="stHeader"] > div,
+        div[data-testid="stToolbar"],
+        div[data-testid="stDecoration"] {
             background: transparent !important;
             border: 0 !important;
             box-shadow: none !important;
@@ -135,7 +137,9 @@ def apply_custom_css() -> None:
         }
 
         section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #11100A 0%, #050505 100%);
+            background:
+                radial-gradient(circle at top left, rgba(139, 92, 246, 0.16), transparent 18rem),
+                linear-gradient(180deg, #0E1024 0%, #050615 100%) !important;
             border-right: 1px solid var(--border);
         }
 
@@ -143,51 +147,106 @@ def apply_custom_css() -> None:
             padding-bottom: 8rem !important;
         }
 
+        section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+            gap: 0.7rem;
+        }
+
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span {
+            color: var(--text) !important;
+        }
+
         section[data-testid="stSidebar"] label {
-            color: #F5EFD8 !important;
-            font-weight: 700 !important;
+            font-weight: 750 !important;
+        }
+
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3 {
+            color: var(--text) !important;
         }
 
         div[data-baseweb="select"] > div,
         div[data-baseweb="input"] > div,
         textarea {
-            background-color: rgba(13, 13, 9, 0.90) !important;
-            border: 1px solid rgba(255, 216, 74, 0.18) !important;
+            background-color: var(--input-bg) !important;
+            border: 1px solid rgba(139, 92, 246, 0.30) !important;
             border-radius: 14px !important;
             box-shadow: none !important;
             outline: none !important;
+            color: var(--text) !important;
+        }
+
+        div[data-baseweb="select"] > div:hover,
+        div[data-baseweb="input"] > div:hover,
+        textarea:hover {
+            border-color: rgba(34, 211, 238, 0.42) !important;
         }
 
         div[data-baseweb="select"] > div:focus-within,
         div[data-baseweb="input"] > div:focus-within,
         textarea:focus {
-            border-color: rgba(255, 216, 74, 0.88) !important;
-            box-shadow: 0 0 0 1px rgba(255, 216, 74, 0.55) !important;
+            border-color: var(--secondary) !important;
+            box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.48) !important;
+            outline: none !important;
+        }
+
+        div[data-baseweb="input"] input,
+        [data-testid="stTextInput"] input,
+        [data-testid="stDateInput"] input,
+        textarea {
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
+            color: var(--text) !important;
+            caret-color: var(--secondary) !important;
+        }
+
+        div[data-baseweb="input"] button,
+        [data-testid="stTextInput"] button,
+        div[data-baseweb="input"] [role="button"],
+        [data-testid="stTextInput"] [role="button"] {
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
+            color: var(--text-soft) !important;
         }
 
         [data-baseweb="tag"] {
-            background: linear-gradient(135deg, rgba(255, 216, 74, 0.22), rgba(255, 176, 0, 0.14)) !important;
-            border: 1px solid rgba(255, 216, 74, 0.38) !important;
-            color: #FFF7CC !important;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.34), rgba(34, 211, 238, 0.16)) !important;
+            border: 1px solid rgba(167, 139, 250, 0.52) !important;
+            color: var(--text) !important;
             border-radius: 999px !important;
         }
-        [data-baseweb="tag"] span, [data-baseweb="tag"] svg { color: #FFF7CC !important; }
+
+        [data-baseweb="tag"] span,
+        [data-baseweb="tag"] svg {
+            color: var(--text) !important;
+        }
 
         .dashboard-hero {
             padding: 1.8rem 2rem;
             border: 1px solid var(--border);
             border-radius: 24px;
-            background: rgba(5, 5, 5, 0.40);
-            box-shadow: inset 0 1px 0 rgba(255,216,74,0.20);
+            background:
+                linear-gradient(135deg, rgba(18, 21, 43, 0.92), rgba(8, 10, 28, 0.74)),
+                linear-gradient(90deg, rgba(139, 92, 246, 0.18), rgba(34, 211, 238, 0.08));
+            box-shadow:
+                0 24px 70px rgba(0, 0, 0, 0.34),
+                inset 0 1px 0 rgba(167, 139, 250, 0.26);
+            backdrop-filter: blur(10px);
             margin-bottom: 1.1rem;
         }
 
         .eyebrow {
-            color: var(--cyan);
+            color: var(--secondary);
             text-transform: uppercase;
             letter-spacing: 0.16em;
             font-size: 0.78rem;
-            font-weight: 800;
+            font-weight: 850;
             margin-bottom: 0.35rem;
         }
 
@@ -195,123 +254,127 @@ def apply_custom_css() -> None:
             font-size: clamp(2.4rem, 4vw, 4.4rem);
             line-height: 1.02;
             font-weight: 950;
-            color: #FFFBEA;
+            color: var(--text);
             margin: 0;
-            text-shadow: 0 3px 16px rgba(0,0,0,0.88);
+            text-shadow: 0 3px 16px rgba(0, 0, 0, 0.74);
         }
 
         .dashboard-subtitle {
             color: var(--text-soft);
             font-size: 1rem;
             margin-top: 0.8rem;
-            text-shadow: 0 2px 10px rgba(0,0,0,0.82);
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.62);
         }
 
         .section-title {
             font-size: 1.35rem;
             font-weight: 850;
-            color: #FFFBEA;
+            color: var(--text);
             margin: 1.5rem 0 0.75rem 0;
         }
 
-        .api-load-caption, .atlas-pill {
+        .api-load-caption,
+        .atlas-pill {
             display: inline-flex;
             align-items: center;
             gap: 0.35rem;
             margin: -0.2rem 0 1.0rem 0;
             padding: 0.38rem 0.72rem;
-            border: 1px solid rgba(255, 216, 74, 0.22);
+            border: 1px solid rgba(139, 92, 246, 0.36);
             border-radius: 999px;
-            background: rgba(13, 13, 9, 0.46);
-            color: #B8B29F;
+            background: rgba(18, 21, 43, 0.62);
+            color: var(--text-soft);
             font-size: 0.80rem;
             font-weight: 650;
             backdrop-filter: blur(6px);
         }
 
-        .api-load-caption span, .atlas-pill span {
-            color: #FFF7CC;
+        .api-load-caption span,
+        .atlas-pill span {
+            color: var(--text);
             font-weight: 800;
         }
 
         div[data-testid="stMetric"] {
-            background: rgba(13, 13, 9, 0.42) !important;
-            border: 1px solid rgba(255, 216, 74, 0.32) !important;
+            background:
+                linear-gradient(135deg, rgba(18, 21, 43, 0.86), rgba(8, 10, 28, 0.76)) !important;
+            border: 1px solid rgba(139, 92, 246, 0.38) !important;
             border-radius: 18px !important;
             padding: 0.85rem 1rem !important;
-            box-shadow: inset 0 1px 0 rgba(255,216,74,0.14) !important;
+            box-shadow:
+                0 14px 34px rgba(0, 0, 0, 0.26),
+                inset 0 1px 0 rgba(167, 139, 250, 0.16) !important;
         }
 
         div[data-testid="stMetricLabel"] p {
-            color: #F5EFD8 !important;
+            color: var(--text-soft) !important;
             font-weight: 800 !important;
         }
 
         div[data-testid="stMetricValue"] {
-            color: #FFFBEA !important;
+            color: var(--text) !important;
             font-weight: 950 !important;
         }
 
         div[data-testid="stDataFrame"] {
-            border: 1px solid var(--border);
+            border: 1px solid rgba(139, 92, 246, 0.32);
             border-radius: 18px;
             overflow: hidden;
-            box-shadow: 0 14px 36px rgba(0,0,0,0.30);
+            box-shadow: 0 14px 36px rgba(0, 0, 0, 0.30);
         }
 
         button[data-baseweb="tab"] {
-            color: #CFC6A5 !important;
+            color: var(--text-soft) !important;
             font-weight: 750 !important;
         }
 
         button[data-baseweb="tab"][aria-selected="true"] {
-            color: #FFD84A !important;
+            color: var(--secondary) !important;
         }
 
         div[data-baseweb="tab-highlight"] {
-            background-color: #FFD84A !important;
+            background-color: var(--secondary) !important;
         }
 
-        .stDownloadButton button, .stButton button {
+        .stDownloadButton button,
+        .stButton button {
             border-radius: 14px !important;
-            border: 1px solid rgba(255, 216, 74, 0.45) !important;
-            background: linear-gradient(135deg, rgba(255, 216, 74, 0.98), rgba(255, 176, 0, 0.86)) !important;
-            color: #121008 !important;
+            border: 1px solid rgba(34, 211, 238, 0.48) !important;
+            background: linear-gradient(135deg, var(--primary), var(--secondary)) !important;
+            color: var(--text) !important;
             font-weight: 850 !important;
+            box-shadow: 0 12px 28px rgba(139, 92, 246, 0.20) !important;
+        }
+
+        .stDownloadButton button:hover,
+        .stButton button:hover {
+            border-color: rgba(167, 139, 250, 0.74) !important;
+            filter: brightness(1.06);
+        }
+
+        div[data-testid="stAlert"],
+        div[data-testid="stAlert"] > div,
+        div[data-testid="stAlert"] [role="alert"] {
+            background: rgba(18, 21, 43, 0.72) !important;
+            border: 1px solid rgba(34, 211, 238, 0.22) !important;
+            color: var(--text) !important;
+            border-radius: 14px !important;
+            box-shadow: none !important;
+        }
+
+        div[data-testid="stSlider"] [role="slider"] {
+            background-color: var(--secondary) !important;
+            border-color: var(--secondary) !important;
+            box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.30) !important;
+        }
+
+        div[data-testid="stSlider"] {
+            accent-color: var(--secondary) !important;
         }
         </style>
-        """.replace("__BACKGROUND_IMAGE_LAYER__", background_image_layer),
+        """,
         unsafe_allow_html=True,
     )
-
-
-def dashboard_background_image_layer(image_url: str) -> str:
-    if not image_url:
-        return ""
-    safe_url = image_url.replace("\\", "\\\\").replace("'", "\\'")
-    return (
-        "linear-gradient(rgba(5, 5, 5, 0.78), rgba(5, 5, 5, 0.88)),\n"
-        f"                url('{safe_url}'),\n"
-    )
-
-
-def dashboard_background_image_url() -> str:
-    source = read_secret("DASHBOARD_BACKGROUND_IMAGE")
-    if source and re.match(r"^(https?://|data:)", source, flags=re.IGNORECASE):
-        return source
-
-    image_path = Path(source).expanduser() if source else DEFAULT_BACKGROUND_IMAGE
-    if not image_path.is_absolute():
-        image_path = APP_DIR / image_path
-    if source and not image_path.is_file():
-        image_path = DEFAULT_BACKGROUND_IMAGE
-
-    if not image_path.is_file():
-        return ""
-
-    mime_type = mimetypes.guess_type(image_path.name)[0] or "image/png"
-    encoded_image = base64.b64encode(image_path.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded_image}"
 
 
 def render_header(selected_group: str, selected_vessels: list[str], selected_variables: list[str]) -> None:
