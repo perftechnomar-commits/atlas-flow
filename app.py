@@ -16,6 +16,8 @@ import pandas as pd
 import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
 # =============================================================================
@@ -829,20 +831,111 @@ def format_display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return display_df.fillna("-")
 
 
-@st.cache_data(show_spinner=False)
-def to_excel_bytes(df: pd.DataFrame) -> bytes:
-    output = BytesIO()
+def make_excel_safe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     safe_df = df.copy()
     for column in safe_df.columns:
         if pd.api.types.is_datetime64_any_dtype(safe_df[column]):
             safe_df[column] = pd.to_datetime(safe_df[column], errors="coerce").dt.tz_localize(None)
+    return safe_df
+
+
+def add_excel_table(worksheet: Any, table_name: str) -> None:
+    if worksheet.max_row < 1 or worksheet.max_column < 1:
+        return
+
+    table_ref = f"A1:{get_column_letter(worksheet.max_column)}{worksheet.max_row}"
+    table = Table(displayName=table_name, ref=table_ref)
+    table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium5",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    worksheet.add_table(table)
+
+
+def autofit_excel_columns(worksheet: Any, max_width: int = 48) -> None:
+    for column_cells in worksheet.columns:
+        max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+        worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 12), max_width)
+
+
+def write_table_sheet(writer: Any, df: pd.DataFrame, sheet_name: str, table_name: str) -> None:
+    safe_df = make_excel_safe_dataframe(df)
+    safe_df.to_excel(writer, index=False, sheet_name=sheet_name)
+    worksheet = writer.sheets[sheet_name]
+    worksheet.freeze_panes = "A2"
+    autofit_excel_columns(worksheet)
+    add_excel_table(worksheet, table_name)
+
+
+@st.cache_data(show_spinner=False)
+def to_excel_bytes(clean_df: pd.DataFrame, pivot_analysis_df: pd.DataFrame | None = None) -> bytes:
+    output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        safe_df.to_excel(writer, index=False, sheet_name="AtlasFlow")
-        worksheet = writer.sheets["AtlasFlow"]
-        for column_cells in worksheet.columns:
-            max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
-            worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 12), 48)
+        write_table_sheet(writer, clean_df, "Clean Dataset", "AtlasFlowCleanDataset")
+
+        if pivot_analysis_df is not None and not pivot_analysis_df.empty:
+            write_table_sheet(writer, pivot_analysis_df, "Pivot Analysis", "AtlasFlowPivotAnalysis")
+
     return output.getvalue()
+
+
+def flatten_pivot_columns(df: pd.DataFrame) -> pd.DataFrame:
+    flat_df = df.copy()
+    if isinstance(flat_df.columns, pd.MultiIndex):
+        flat_df.columns = [
+            " | ".join(str(part) for part in column if str(part) not in {"", "nan", "NaT"})
+            for column in flat_df.columns.to_flat_index()
+        ]
+    else:
+        flat_df.columns = [str(column) for column in flat_df.columns]
+    return flat_df
+
+
+def build_pivot_analysis(
+    clean_df: pd.DataFrame,
+    row_fields: list[str],
+    column_fields: list[str],
+    value_field: str,
+    aggregation: str,
+) -> pd.DataFrame:
+    if clean_df.empty or not row_fields or not value_field or value_field not in clean_df.columns:
+        return pd.DataFrame()
+
+    source_df = clean_df.copy()
+    source_df[value_field] = pd.to_numeric(source_df[value_field], errors="coerce")
+
+    aggregation_map = {
+        "Average": "mean",
+        "Sum": "sum",
+        "Count": "count",
+        "Minimum": "min",
+        "Maximum": "max",
+        "Median": "median",
+    }
+    aggfunc = aggregation_map.get(aggregation, "mean")
+
+    pivot_df = pd.pivot_table(
+        source_df,
+        values=value_field,
+        index=row_fields,
+        columns=column_fields if column_fields else None,
+        aggfunc=aggfunc,
+        dropna=False,
+    ).reset_index()
+
+    return flatten_pivot_columns(pivot_df)
+
+
+def numeric_column_options(df: pd.DataFrame) -> list[str]:
+    options: list[str] = []
+    for column in df.columns:
+        values = pd.to_numeric(df[column], errors="coerce")
+        if values.notna().any():
+            options.append(column)
+    return options
 
 
 def filter_digest(column: str) -> str:
@@ -1336,25 +1429,90 @@ def main() -> None:
                 "Use the Excel export for the full filtered pivot table."
             )
 
+        st.markdown('<div class="section-title">Excel Pivot Builder</div>', unsafe_allow_html=True)
+        st.caption(
+            "Configure the optional Pivot Analysis sheet. The Clean Dataset sheet always exports the exact table shown above."
+        )
+
+        pivot_builder_columns = [column for column in output_df.columns]
+        pivot_value_options = numeric_column_options(output_df)
+
+        builder_cols = st.columns(4)
+        with builder_cols[0]:
+            pivot_row_fields = st.multiselect(
+                "Pivot row fields",
+                options=pivot_builder_columns,
+                default=[column for column in ["ShipName"] if column in pivot_builder_columns],
+                key="atlas_export_pivot_rows",
+            )
+        with builder_cols[1]:
+            pivot_column_fields = st.multiselect(
+                "Pivot column fields",
+                options=[column for column in pivot_builder_columns if column not in pivot_row_fields],
+                default=[column for column in ["ReportType"] if column in pivot_builder_columns and column not in pivot_row_fields],
+                key="atlas_export_pivot_columns",
+            )
+        with builder_cols[2]:
+            pivot_value_field = st.selectbox(
+                "Pivot value field",
+                options=pivot_value_options,
+                index=0 if pivot_value_options else None,
+                key="atlas_export_pivot_value",
+                placeholder="Select numeric value",
+            )
+        with builder_cols[3]:
+            pivot_aggregation = st.selectbox(
+                "Aggregation",
+                options=["Average", "Sum", "Count", "Minimum", "Maximum", "Median"],
+                index=0,
+                key="atlas_export_pivot_aggregation",
+            )
+
+        pivot_analysis_df = pd.DataFrame()
+        if pivot_row_fields and pivot_value_field:
+            pivot_analysis_df = build_pivot_analysis(
+                output_df,
+                row_fields=pivot_row_fields,
+                column_fields=pivot_column_fields,
+                value_field=pivot_value_field,
+                aggregation=pivot_aggregation,
+            )
+
+        if pivot_analysis_df.empty:
+            st.caption("Pivot Analysis sheet will be skipped unless at least one row field and one numeric value field are selected.")
+        else:
+            with st.expander("Preview Pivot Analysis", expanded=False):
+                st.dataframe(format_display_dataframe(pivot_analysis_df.head(TABLE_PREVIEW_ROW_LIMIT)), use_container_width=True, hide_index=True)
+
+        export_signature_payload = "|".join([
+            sha256(pd.util.hash_pandas_object(output_df, index=True).values.tobytes()).hexdigest(),
+            sha256(pd.util.hash_pandas_object(pivot_analysis_df, index=True).values.tobytes()).hexdigest() if not pivot_analysis_df.empty else "no_pivot",
+            ",".join(pivot_row_fields),
+            ",".join(pivot_column_fields),
+            str(pivot_value_field),
+            pivot_aggregation,
+        ])
+        current_export_signature = sha256(export_signature_payload.encode("utf-8")).hexdigest()
+
         export_ready = (
-            st.session_state.get("atlas_export_signature") == sha256(
-                pd.util.hash_pandas_object(output_df, index=True).values.tobytes()
-            ).hexdigest()
+            st.session_state.get("atlas_export_signature") == current_export_signature
             and "atlas_export_bytes" in st.session_state
         )
 
         if st.button("Prepare Excel download", type="primary"):
             with st.spinner("Preparing Excel file..."):
-                signature = sha256(pd.util.hash_pandas_object(output_df, index=True).values.tobytes()).hexdigest()
-                st.session_state["atlas_export_bytes"] = to_excel_bytes(output_df)
-                st.session_state["atlas_export_signature"] = signature
+                st.session_state["atlas_export_bytes"] = to_excel_bytes(
+                    output_df,
+                    pivot_analysis_df if not pivot_analysis_df.empty else None,
+                )
+                st.session_state["atlas_export_signature"] = current_export_signature
             export_ready = True
 
         if export_ready:
             st.download_button(
                 "Download AtlasFlow Excel",
                 data=st.session_state["atlas_export_bytes"],
-                file_name="atlasflow_pivot_table.xlsx",
+                file_name="atlasflow_export.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         else:
