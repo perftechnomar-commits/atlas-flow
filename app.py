@@ -1861,9 +1861,16 @@ def fetch_report_data_to_snapshot(
         if writer is not None:
             writer.close()
 
+    RAW_SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+
     if kept_rows_total == 0:
         empty_df = normalize_snapshot_values(pd.DataFrame(columns=SOURCE_COLUMNS))
-        empty_df.to_parquet(tmp_file, index=False)
+        empty_table = pa.Table.from_pandas(empty_df, preserve_index=False)
+        pq.write_table(empty_table, tmp_file, compression="zstd")
+        del empty_df, empty_table
+
+    if not tmp_file.exists():
+        raise FileNotFoundError(f"ReportData snapshot temporary file was not created: {tmp_file}")
 
     tmp_file.replace(RAW_SNAPSHOT_FILE)
     loaded_at_utc = datetime.now(timezone.utc)
@@ -1978,10 +1985,23 @@ def fetch_wide_source_to_snapshot(
         if writer is not None:
             writer.close()
 
-    if row_count == 0:
-        pd.DataFrame().to_parquet(tmp_file, index=False)
+    target_file = Path(config["snapshot_file"])
+    target_file.parent.mkdir(parents=True, exist_ok=True)
 
-    tmp_file.replace(Path(config["snapshot_file"]))
+    if row_count == 0:
+        # Some pyarrow versions do not reliably materialize a completely columnless
+        # empty parquet file. Keep an explicit marker column so the snapshot file
+        # exists and the warmup can finish gracefully even when the API returns no rows.
+        empty_columns = all_columns if all_columns else ["NoData"]
+        empty_df = normalize_snapshot_values(pd.DataFrame(columns=empty_columns))
+        empty_table = pa.Table.from_pandas(empty_df, preserve_index=False)
+        pq.write_table(empty_table, tmp_file, compression="zstd")
+        del empty_df, empty_table
+
+    if not tmp_file.exists():
+        raise FileNotFoundError(f"Snapshot temporary file was not created: {tmp_file}")
+
+    tmp_file.replace(target_file)
     loaded_at_utc = datetime.now(timezone.utc)
     metadata = {
         "source": config["label"],
