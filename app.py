@@ -5,9 +5,11 @@ from hashlib import sha256
 from html import escape
 from io import BytesIO
 import hmac
+import json
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urljoin
 from zoneinfo import ZoneInfo
@@ -25,6 +27,10 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 # =============================================================================
 
 APP_TITLE = "AtlasFlow"
+APP_DIR = Path(__file__).resolve().parent
+SNAPSHOT_DIR = APP_DIR / ".atlasflow_cache"
+RAW_SNAPSHOT_FILE = SNAPSHOT_DIR / "atlasflow_raw.pkl"
+METADATA_SNAPSHOT_FILE = SNAPSHOT_DIR / "atlasflow_metadata.json"
 ODATA_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 MAX_ODATA_PAGES = 250
 API_CACHE_TTL_SECONDS = 21600  # 6 hours
@@ -61,6 +67,11 @@ PIVOT_IDENTITY_COLUMNS = [
 
 DEFAULT_DISPLAY_IDENTITY_COLUMNS = [
     "ShipName",
+    "ReportType",
+    "StartDateTimeGMT",
+    "EndDateTimeGMT",
+    "LapTime",
+    "StateName",
 ]
 
 # Derived calculation setup. These columns are calculated from the same Marorka
@@ -1314,6 +1325,46 @@ def set_loaded_raw_state(raw_df: pd.DataFrame, metadata: dict[str, Any], signatu
     st.session_state.pop("loaded_prepare_signature", None)
 
 
+def save_raw_snapshot(raw_df: pd.DataFrame, metadata: dict[str, Any], signature: dict[str, Any]) -> None:
+    """Persist the latest successful raw API pull as a local fallback after app restarts."""
+    try:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        raw_df.to_pickle(RAW_SNAPSHOT_FILE)
+        snapshot_payload = {
+            "metadata": metadata,
+            "signature": signature,
+            "saved_at_utc": datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M:%S UTC"),
+        }
+        METADATA_SNAPSHOT_FILE.write_text(json.dumps(snapshot_payload, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        # Snapshot persistence is a speed fallback only; never break the app if it fails.
+        return
+
+
+def load_raw_snapshot(
+    requested_signature: dict[str, Any],
+    requested_start_date: date,
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]] | None:
+    """Load the latest local raw-data snapshot if it covers the current API request."""
+    try:
+        if not RAW_SNAPSHOT_FILE.is_file() or not METADATA_SNAPSHOT_FILE.is_file():
+            return None
+        snapshot_payload = json.loads(METADATA_SNAPSHOT_FILE.read_text(encoding="utf-8"))
+        metadata = snapshot_payload.get("metadata") or {}
+        signature = snapshot_payload.get("signature") or {}
+        if not raw_data_covers_request(signature, metadata, requested_signature, requested_start_date):
+            return None
+        raw_df = pd.read_pickle(RAW_SNAPSHOT_FILE)
+        if not isinstance(raw_df, pd.DataFrame) or raw_df.empty:
+            return None
+        metadata = metadata.copy()
+        metadata["loaded_from_snapshot"] = True
+        metadata.setdefault("snapshot_saved_at_utc", snapshot_payload.get("saved_at_utc", "-"))
+        return raw_df, metadata, signature
+    except Exception:
+        return None
+
+
 def set_loaded_long_state(long_df: pd.DataFrame, signature: dict[str, Any]) -> None:
     st.session_state["loaded_long_df"] = long_df
     st.session_state["loaded_prepare_signature"] = signature
@@ -1321,29 +1372,52 @@ def set_loaded_long_state(long_df: pd.DataFrame, signature: dict[str, Any]) -> N
 
 def selected_vessel_controls() -> tuple[str, list[str]]:
     group_options = ["Single vessel", "All fleets"] + list(VESSEL_GROUPS.keys())
-    selected_group = st.sidebar.selectbox("Fleet group", options=group_options)
+    selected_group = st.sidebar.selectbox("Fleet group", options=group_options, key="atlas_fleet_group")
 
     if selected_group == "Single vessel":
-        vessel = st.sidebar.selectbox("Vessel to include", options=VESSEL_OPTIONS)
+        vessel = st.sidebar.selectbox("Vessel to include", options=VESSEL_OPTIONS, key="atlas_single_vessel")
         return selected_group, [vessel]
 
     if selected_group == "All fleets":
         group_vessels = VESSEL_OPTIONS
+        all_label = "Include all vessels"
     else:
         group_vessels = VESSEL_GROUPS[selected_group]
+        all_label = "Include all vessels in this fleet"
+
+    include_all_key = f"atlas_include_all_vessels_{normalize_text(selected_group)}"
+    include_all_vessels = st.sidebar.checkbox(
+        all_label,
+        value=True,
+        key=include_all_key,
+        help="Keep this enabled to include every vessel in the selected fleet/group without filling the selector with tags.",
+    )
+
+    if include_all_vessels:
+        st.sidebar.caption(f"Using all {len(group_vessels):,} vessels in {selected_group}.")
+        return selected_group, list(group_vessels)
+
+    vessel_key = "atlas_selected_vessels"
+    previous_vessels = st.session_state.get(vessel_key, [])
+    if not isinstance(previous_vessels, list):
+        previous_vessels = []
+    valid_previous_vessels = [vessel for vessel in previous_vessels if vessel in group_vessels]
+    if valid_previous_vessels != previous_vessels:
+        st.session_state[vessel_key] = valid_previous_vessels
 
     vessels = st.sidebar.multiselect(
         "Vessels to include",
         options=group_vessels,
-        default=group_vessels,
+        default=valid_previous_vessels,
+        key=vessel_key,
         help="This controls the displayed pivot table only. The API data is loaded broadly.",
     )
 
     if not vessels:
         st.sidebar.caption("No vessels selected manually, so all vessels in this fleet group are included.")
-        vessels = group_vessels
+        vessels = list(group_vessels)
 
-    return selected_group, vessels
+    return selected_group, list(vessels)
 
 
 def sidebar_refresh_control() -> bool:
@@ -1419,6 +1493,8 @@ def run_warmup_if_requested() -> None:
     try:
         with st.spinner("Warming up API..."):
             raw_df, metadata = cached_fetch_report_data(username, password, token, auth_method, start_date)
+            warmup_signature = request_signature(username, auth_method, start_date)
+            save_raw_snapshot(raw_df, metadata, warmup_signature)
             long_df = cached_prepare_long_data(raw_df)
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
@@ -1477,6 +1553,14 @@ def main() -> None:
         or not raw_data_covers_request(current_raw_signature, metadata, raw_signature, api_start_date)
     )
 
+    if needs_raw_load and not refresh:
+        snapshot = load_raw_snapshot(raw_signature, api_start_date)
+        if snapshot is not None:
+            raw_df, metadata, snapshot_signature = snapshot
+            set_loaded_raw_state(raw_df, metadata, snapshot_signature)
+            long_df = None
+            needs_raw_load = False
+
     if needs_raw_load:
         if refresh:
             cached_fetch_report_data.clear()
@@ -1492,6 +1576,7 @@ def main() -> None:
                     start_date=api_start_date,
                 )
             set_loaded_raw_state(raw_df, metadata, raw_signature)
+            save_raw_snapshot(raw_df, metadata, raw_signature)
             long_df = None
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else "unknown"
@@ -1576,11 +1661,11 @@ def main() -> None:
     identity_columns = st.sidebar.multiselect(
         "Pivot rows",
         options=PIVOT_IDENTITY_COLUMNS,
-        default=DEFAULT_DISPLAY_IDENTITY_COLUMNS,
-        help="Choose the report fields used as row identifiers before the selected variable columns.",
+        default=["ShipName"],
+        help="Choose the row fields that appear before the selected variable columns.",
     )
     if not identity_columns:
-        identity_columns = DEFAULT_DISPLAY_IDENTITY_COLUMNS
+        identity_columns = ["ShipName"]
 
     render_header(selected_group, selected_vessels, selected_variables)
     render_api_load_caption(metadata)
@@ -1593,10 +1678,17 @@ def main() -> None:
     filter_column_options = [column for column in [*identity_columns, *selected_variables] if column in pivot_df.columns]
     with st.sidebar.expander("Filters for displayed columns", expanded=False):
         st.caption("Choose columns to filter. Selected variables are already part of the displayed table.")
+        previous_filter_columns = st.session_state.get("atlas_columns_to_filter", [])
+        if not isinstance(previous_filter_columns, list):
+            previous_filter_columns = []
+        valid_filter_columns = [column for column in previous_filter_columns if column in filter_column_options]
+        if valid_filter_columns != previous_filter_columns:
+            st.session_state["atlas_columns_to_filter"] = valid_filter_columns
+
         columns_to_filter = st.multiselect(
             "Columns to filter",
             options=filter_column_options,
-            default=[],
+            default=valid_filter_columns,
             key="atlas_columns_to_filter",
         )
         filter_specs = render_column_filters(pivot_df, columns_to_filter)
@@ -1647,10 +1739,23 @@ def main() -> None:
 
         builder_cols = st.columns(3)
         with builder_cols[0]:
+            previous_summary_groups = st.session_state.get("atlas_export_summary_groups", [])
+            if not isinstance(previous_summary_groups, list):
+                previous_summary_groups = []
+            default_summary_groups = [column for column in ["ShipName", "ReportType"] if column in summary_builder_columns]
+            valid_summary_group_defaults = [
+                column for column in previous_summary_groups
+                if column in summary_builder_columns
+            ]
+            if not valid_summary_group_defaults and "atlas_export_summary_groups" not in st.session_state:
+                valid_summary_group_defaults = default_summary_groups
+            if valid_summary_group_defaults != previous_summary_groups:
+                st.session_state["atlas_export_summary_groups"] = valid_summary_group_defaults
+
             summary_group_fields = st.multiselect(
                 "Group by fields",
                 options=summary_builder_columns,
-                default=[column for column in ["ShipName", "ReportType"] if column in summary_builder_columns],
+                default=valid_summary_group_defaults,
                 key="atlas_export_summary_groups",
                 help="Choose the fields that define each summary row.",
             )
@@ -1662,6 +1767,9 @@ def main() -> None:
                 column for column in previous_summary_values
                 if column in summary_value_options
             ]
+            if valid_summary_value_defaults != previous_summary_values:
+                st.session_state["atlas_export_summary_values"] = valid_summary_value_defaults
+
             summary_value_fields = st.multiselect(
                 "Value fields",
                 options=summary_value_options,
@@ -1677,29 +1785,42 @@ def main() -> None:
                 key="atlas_export_summary_aggregation",
             )
 
-        summary_analysis_df = pd.DataFrame()
-        if summary_group_fields and summary_value_fields:
-            summary_analysis_df = build_summary_analysis(
-                output_df,
-                group_fields=summary_group_fields,
-                value_fields=summary_value_fields,
-                aggregation=summary_aggregation,
+        summary_can_build = bool(summary_group_fields and summary_value_fields)
+        if summary_can_build:
+            st.caption(
+                "Summary Analysis will be generated only when you click Prepare Excel download, "
+                "so changing fleet/variable selections does not overload the live app."
             )
-
-        if summary_analysis_df.empty:
-            st.caption("Summary Analysis sheet will be skipped unless at least one group field and one value field are selected.")
         else:
-            with st.expander("Preview Summary Analysis", expanded=False):
-                st.dataframe(format_display_dataframe(summary_analysis_df.head(TABLE_PREVIEW_ROW_LIMIT)), use_container_width=True, hide_index=True)
+            st.caption("Summary Analysis sheet will be skipped unless at least one group field and one value field are selected.")
 
         export_signature_payload = "|".join([
-            sha256(pd.util.hash_pandas_object(output_df, index=True).values.tobytes()).hexdigest(),
-            sha256(pd.util.hash_pandas_object(summary_analysis_df, index=True).values.tobytes()).hexdigest() if not summary_analysis_df.empty else "no_summary",
+            ",".join(selected_vessels),
+            selected_start.isoformat(),
+            selected_end.isoformat(),
+            ",".join(display_columns),
+            ",".join(selected_variables),
+            str(len(output_df)),
+            str(len(filtered_long_for_options)),
             ",".join(summary_group_fields),
             ",".join(summary_value_fields),
             summary_aggregation,
         ])
         current_export_signature = sha256(export_signature_payload.encode("utf-8")).hexdigest()
+
+        prepared_summary_df = st.session_state.get("atlas_summary_analysis_df")
+        summary_preview_ready = (
+            st.session_state.get("atlas_export_signature") == current_export_signature
+            and isinstance(prepared_summary_df, pd.DataFrame)
+            and not prepared_summary_df.empty
+        )
+        if summary_preview_ready:
+            with st.expander("Preview Summary Analysis", expanded=False):
+                st.dataframe(
+                    format_display_dataframe(prepared_summary_df.head(TABLE_PREVIEW_ROW_LIMIT)),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
         export_ready = (
             st.session_state.get("atlas_export_signature") == current_export_signature
@@ -1708,11 +1829,27 @@ def main() -> None:
 
         if st.button("Prepare Excel download", type="primary"):
             with st.spinner("Preparing Excel file..."):
+                summary_analysis_df = pd.DataFrame()
+                if summary_can_build:
+                    summary_analysis_df = build_summary_analysis(
+                        output_df,
+                        group_fields=summary_group_fields,
+                        value_fields=summary_value_fields,
+                        aggregation=summary_aggregation,
+                    )
                 st.session_state["atlas_export_bytes"] = to_excel_bytes(
                     output_df,
                     summary_analysis_df if not summary_analysis_df.empty else None,
                 )
+                st.session_state["atlas_summary_analysis_df"] = summary_analysis_df
                 st.session_state["atlas_export_signature"] = current_export_signature
+            if not st.session_state["atlas_summary_analysis_df"].empty:
+                with st.expander("Preview Summary Analysis", expanded=False):
+                    st.dataframe(
+                        format_display_dataframe(st.session_state["atlas_summary_analysis_df"].head(TABLE_PREVIEW_ROW_LIMIT)),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
             export_ready = True
 
         if export_ready:
@@ -1737,6 +1874,8 @@ def main() -> None:
                     "Selected end",
                     "API loaded at",
                     "API loaded local time",
+                    "Loaded from snapshot",
+                    "Snapshot saved at",
                     "Kept raw rows",
                     "Original API rows scanned",
                     "Discarded rows",
@@ -1760,6 +1899,8 @@ def main() -> None:
                     selected_end.isoformat(),
                     metadata.get("loaded_at_utc", "-"),
                     metadata.get("loaded_at_local", "-"),
+                    str(metadata.get("loaded_from_snapshot", False)),
+                    metadata.get("snapshot_saved_at_utc", "-"),
                     f"{metadata.get('kept_rows', metadata.get('rows', 0)):,}",
                     f"{metadata.get('scanned_rows', 0):,}",
                     f"{metadata.get('discarded_rows', 0):,}",
