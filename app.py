@@ -1963,20 +1963,98 @@ def sidebar_refresh_control() -> bool:
     return refresh
 
 
+def add_months(base_date: date, months: int) -> date:
+    month_index = base_date.month - 1 + months
+    year = base_date.year + month_index // 12
+    month = month_index % 12 + 1
+    days_in_month = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    day = min(base_date.day, days_in_month[month - 1])
+    return date(year, month, day)
+
+
+def first_day_of_month(value: date) -> date:
+    return date(value.year, value.month, 1)
+
+
+def last_day_previous_month(value: date) -> date:
+    return first_day_of_month(value) - timedelta(days=1)
+
+
+def clamp_period(start_value: date, end_value: date, min_date: date, max_date: date) -> tuple[date, date]:
+    start_value = max(start_value, min_date)
+    end_value = min(end_value, max_date)
+    if start_value > end_value:
+        return min_date, max_date
+    return start_value, end_value
+
+
+def dynamic_period_dates(period_label: str, min_date: date, max_date: date) -> tuple[date, date]:
+    anchor_date = min(max_date, date.today())
+
+    if period_label == "YTD":
+        start_value = date(anchor_date.year, 1, 1)
+        end_value = anchor_date
+    elif period_label == "Previous month":
+        end_value = last_day_previous_month(anchor_date)
+        start_value = first_day_of_month(end_value)
+    elif period_label == "Year to previous month":
+        end_value = last_day_previous_month(anchor_date)
+        start_value = date(end_value.year, 1, 1)
+    elif period_label == "Previous 3 months":
+        end_value = anchor_date
+        start_value = add_months(anchor_date, -3) + timedelta(days=1)
+    elif period_label == "Previous 6 months":
+        end_value = anchor_date
+        start_value = add_months(anchor_date, -6) + timedelta(days=1)
+    elif period_label == "Previous 12 months":
+        end_value = anchor_date
+        start_value = add_months(anchor_date, -12) + timedelta(days=1)
+    else:
+        start_value = min_date
+        end_value = max_date
+
+    return clamp_period(start_value, end_value, min_date, max_date)
+
+
 def render_date_slicer(df: pd.DataFrame) -> tuple[date, date]:
     min_date, max_date = dataframe_date_window(df)
     st.sidebar.markdown("### Period")
     if min_date >= max_date:
         st.sidebar.caption(f"Available data period: {min_date.strftime('%d/%m/%Y')}")
         return min_date, max_date
-    selected_start, selected_end = st.sidebar.slider(
-        "Report period",
-        min_value=min_date,
-        max_value=max_date,
-        value=(min_date, max_date),
-        format="DD/MM/YYYY",
-        key="atlas_period_slicer",
+
+    period_mode = st.sidebar.selectbox(
+        "Period preset",
+        options=[
+            "Custom range",
+            "YTD",
+            "Previous month",
+            "Year to previous month",
+            "Previous 3 months",
+            "Previous 6 months",
+            "Previous 12 months",
+            "Full available period",
+        ],
+        index=0,
+        key="atlas_period_preset",
+        help="Use a dynamic preset or choose Custom range to control the period manually with the slider.",
     )
+
+    if period_mode == "Custom range":
+        selected_start, selected_end = st.sidebar.slider(
+            "Report period",
+            min_value=min_date,
+            max_value=max_date,
+            value=(min_date, max_date),
+            format="DD/MM/YYYY",
+            key="atlas_period_slicer",
+        )
+    else:
+        selected_start, selected_end = dynamic_period_dates(period_mode, min_date, max_date)
+        st.sidebar.caption(
+            f"Selected period: {selected_start.strftime('%d/%m/%Y')} to {selected_end.strftime('%d/%m/%Y')}"
+        )
+
     return selected_start, selected_end
 
 
