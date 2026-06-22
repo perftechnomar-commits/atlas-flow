@@ -72,6 +72,102 @@ EXCLUDED_REPORT_TYPES = [
     "Fuel Change Report",
 ]
 
+# ReportData is intentionally loaded in the same compact mode as the
+# Performance KPIs app. Pulling every ValueDescription from ReportData is too
+# broad for Streamlit Cloud and makes the source slow/fragile. These aliases
+# are the KPI/calculation values that AtlasFlow needs now; we can expand this
+# whitelist later in controlled groups.
+PERFORMANCE_KPI_VALUE_ALIASES = {
+    "Engine Distance [nm]": [
+        "Engine Distance [nm]",
+    ],
+    "Distance Over Ground [nm]": [
+        "Distance Over Ground [nm]",
+    ],
+    "Steaming Time Since Last Report [hh:mm]": [
+        "Steaming Time Since Last Report [hh:mm]",
+        "Steaming Time Since Last Report",
+    ],
+    "ME Load [%MCR]": [
+        "ME Load [%MCR]",
+        "ME Load [% MCR]",
+    ],
+    "Power from Torque Meter [kW]": [
+        "Power from Torque Meter [kW]",
+        "Total Shaft Power [kW] (kW)",
+        "Total Shaft Power [kW]",
+    ],
+    "Main Engine - HSHFO": ["Main Engine - HSHFO"],
+    "Main Engine - HSLFO": ["Main Engine - HSLFO"],
+    "Main Engine - MGO": ["Main Engine - MGO"],
+    "Main Engine - ULSHFO": ["Main Engine - ULSHFO"],
+    "Main Engine - ULSLFO": ["Main Engine - ULSLFO"],
+    "Main Engine - VLSHFO": ["Main Engine - VLSHFO"],
+    "Main Engine - VLSLFO": ["Main Engine - VLSLFO"],
+    "Boiler - HSHFO": ["Boiler - HSHFO"],
+    "Boiler - HSLFO": ["Boiler - HSLFO"],
+    "Boiler - MGO": ["Boiler - MGO"],
+    "Boiler - ULSHFO": ["Boiler - ULSHFO"],
+    "Boiler - ULSLFO": ["Boiler - ULSLFO"],
+    "Boiler - VLSHFO": ["Boiler - VLSHFO"],
+    "Boiler - VLSLFO": ["Boiler - VLSLFO"],
+
+    # Additional bunker/fuel consumption ValueDescriptions for ME/DG/Auxiliary
+    # analysis. These are included in the ReportData API whitelist so bunker
+    # consumption fields can be selected/exported and later used for derived
+    # calculations without broad-loading all ReportData.
+    "Main Engine Total Consumed": [
+        "Main Engine Total Consumed",
+        "ME Total Consumed",
+        "Main Engine Consumption",
+        "ME Consumption",
+        "MEConsumed",
+    ],
+    "Diesel Generator Total Consumed": [
+        "Diesel Generator Total Consumed",
+        "DG Total Consumed",
+        "DG Totals Consumed",
+        "DGTotalsConsumed",
+        "DGTotalConsumed",
+        "Generator Total Consumed",
+    ],
+    "Auxiliary Engine Total Consumed": [
+        "Auxiliary Engine Total Consumed",
+        "Aux Engine Total Consumed",
+        "Aux Total Consumed",
+        "AuxConsumed",
+    ],
+    "Total Fuel Consumed": [
+        "Total Fuel Consumed",
+        "Total Consumed",
+        "Total Consumption",
+        "Bunker Consumption",
+        "Fuel Consumption",
+    ],
+    "Diesel Generator - HSHFO": ["Diesel Generator - HSHFO", "DG - HSHFO", "Generator - HSHFO"],
+    "Diesel Generator - HSLFO": ["Diesel Generator - HSLFO", "DG - HSLFO", "Generator - HSLFO"],
+    "Diesel Generator - MGO": ["Diesel Generator - MGO", "DG - MGO", "Generator - MGO", "DG - MGO/MDO"],
+    "Diesel Generator - ULSHFO": ["Diesel Generator - ULSHFO", "DG - ULSHFO", "Generator - ULSHFO"],
+    "Diesel Generator - ULSLFO": ["Diesel Generator - ULSLFO", "DG - ULSLFO", "Generator - ULSLFO"],
+    "Diesel Generator - VLSHFO": ["Diesel Generator - VLSHFO", "DG - VLSHFO", "Generator - VLSHFO"],
+    "Diesel Generator - VLSLFO": ["Diesel Generator - VLSLFO", "DG - VLSLFO", "Generator - VLSLFO"],
+    "Auxiliary Engine - HSHFO": ["Auxiliary Engine - HSHFO", "Aux Engine - HSHFO", "Aux - HSHFO"],
+    "Auxiliary Engine - HSLFO": ["Auxiliary Engine - HSLFO", "Aux Engine - HSLFO", "Aux - HSLFO"],
+    "Auxiliary Engine - MGO": ["Auxiliary Engine - MGO", "Aux Engine - MGO", "Aux - MGO", "Aux - MGO/MDO"],
+    "Auxiliary Engine - ULSHFO": ["Auxiliary Engine - ULSHFO", "Aux Engine - ULSHFO", "Aux - ULSHFO"],
+    "Auxiliary Engine - ULSLFO": ["Auxiliary Engine - ULSLFO", "Aux Engine - ULSLFO", "Aux - ULSLFO"],
+    "Auxiliary Engine - VLSHFO": ["Auxiliary Engine - VLSHFO", "Aux Engine - VLSHFO", "Aux - VLSHFO"],
+    "Auxiliary Engine - VLSLFO": ["Auxiliary Engine - VLSLFO", "Aux Engine - VLSLFO", "Aux - VLSLFO"],
+}
+
+REPORTDATA_VALUE_WHITELIST = sorted(
+    {alias for aliases in PERFORMANCE_KPI_VALUE_ALIASES.values() for alias in aliases},
+    key=str.casefold,
+)
+REPORTDATA_VALUE_WHITELIST_KEYS = {
+    re.sub(r"[^a-z0-9]+", "", value.lower()) for value in REPORTDATA_VALUE_WHITELIST
+}
+
 SOURCE_COLUMNS = [
     "ReportId",
     "ShipName",
@@ -113,6 +209,14 @@ DERIVED_VALUE_ALIASES = {
     "Distance Over Ground [nm]": [
         "Distance Over Ground [nm]",
     ],
+    "Steaming Time Since Last Report [hh:mm]": [
+        "Steaming Time Since Last Report [hh:mm]",
+        "Steaming Time Since Last Report",
+    ],
+    "ME Load [%MCR]": [
+        "ME Load [%MCR]",
+        "ME Load [% MCR]",
+    ],
     "Power from Torque Meter [kW]": [
         "Power from Torque Meter [kW]",
         "Total Shaft Power [kW] (kW)",
@@ -132,6 +236,53 @@ DERIVED_VALUE_ALIASES = {
     "Boiler - ULSLFO": ["Boiler - ULSLFO"],
     "Boiler - VLSHFO": ["Boiler - VLSHFO"],
     "Boiler - VLSLFO": ["Boiler - VLSLFO"],
+
+    # Additional bunker/fuel consumption ValueDescriptions for ME/DG/Auxiliary
+    # analysis. These are included in the ReportData API whitelist so bunker
+    # consumption fields can be selected/exported and later used for derived
+    # calculations without broad-loading all ReportData.
+    "Main Engine Total Consumed": [
+        "Main Engine Total Consumed",
+        "ME Total Consumed",
+        "Main Engine Consumption",
+        "ME Consumption",
+        "MEConsumed",
+    ],
+    "Diesel Generator Total Consumed": [
+        "Diesel Generator Total Consumed",
+        "DG Total Consumed",
+        "DG Totals Consumed",
+        "DGTotalsConsumed",
+        "DGTotalConsumed",
+        "Generator Total Consumed",
+    ],
+    "Auxiliary Engine Total Consumed": [
+        "Auxiliary Engine Total Consumed",
+        "Aux Engine Total Consumed",
+        "Aux Total Consumed",
+        "AuxConsumed",
+    ],
+    "Total Fuel Consumed": [
+        "Total Fuel Consumed",
+        "Total Consumed",
+        "Total Consumption",
+        "Bunker Consumption",
+        "Fuel Consumption",
+    ],
+    "Diesel Generator - HSHFO": ["Diesel Generator - HSHFO", "DG - HSHFO", "Generator - HSHFO"],
+    "Diesel Generator - HSLFO": ["Diesel Generator - HSLFO", "DG - HSLFO", "Generator - HSLFO"],
+    "Diesel Generator - MGO": ["Diesel Generator - MGO", "DG - MGO", "Generator - MGO", "DG - MGO/MDO"],
+    "Diesel Generator - ULSHFO": ["Diesel Generator - ULSHFO", "DG - ULSHFO", "Generator - ULSHFO"],
+    "Diesel Generator - ULSLFO": ["Diesel Generator - ULSLFO", "DG - ULSLFO", "Generator - ULSLFO"],
+    "Diesel Generator - VLSHFO": ["Diesel Generator - VLSHFO", "DG - VLSHFO", "Generator - VLSHFO"],
+    "Diesel Generator - VLSLFO": ["Diesel Generator - VLSLFO", "DG - VLSLFO", "Generator - VLSLFO"],
+    "Auxiliary Engine - HSHFO": ["Auxiliary Engine - HSHFO", "Aux Engine - HSHFO", "Aux - HSHFO"],
+    "Auxiliary Engine - HSLFO": ["Auxiliary Engine - HSLFO", "Aux Engine - HSLFO", "Aux - HSLFO"],
+    "Auxiliary Engine - MGO": ["Auxiliary Engine - MGO", "Aux Engine - MGO", "Aux - MGO", "Aux - MGO/MDO"],
+    "Auxiliary Engine - ULSHFO": ["Auxiliary Engine - ULSHFO", "Aux Engine - ULSHFO", "Aux - ULSHFO"],
+    "Auxiliary Engine - ULSLFO": ["Auxiliary Engine - ULSLFO", "Aux Engine - ULSLFO", "Aux - ULSLFO"],
+    "Auxiliary Engine - VLSHFO": ["Auxiliary Engine - VLSHFO", "Aux Engine - VLSHFO", "Aux - VLSHFO"],
+    "Auxiliary Engine - VLSLFO": ["Auxiliary Engine - VLSLFO", "Aux Engine - VLSLFO", "Aux - VLSLFO"],
 }
 
 ME_FUEL_COLUMNS = [
@@ -154,11 +305,35 @@ BOILER_FUEL_COLUMNS = [
     "Boiler - VLSLFO",
 ]
 
+DG_FUEL_COLUMNS = [
+    "Diesel Generator - HSHFO",
+    "Diesel Generator - HSLFO",
+    "Diesel Generator - MGO",
+    "Diesel Generator - ULSHFO",
+    "Diesel Generator - ULSLFO",
+    "Diesel Generator - VLSHFO",
+    "Diesel Generator - VLSLFO",
+]
+
+AUXILIARY_FUEL_COLUMNS = [
+    "Auxiliary Engine - HSHFO",
+    "Auxiliary Engine - HSLFO",
+    "Auxiliary Engine - MGO",
+    "Auxiliary Engine - ULSHFO",
+    "Auxiliary Engine - ULSLFO",
+    "Auxiliary Engine - VLSHFO",
+    "Auxiliary Engine - VLSLFO",
+]
+
 DERIVED_VARIABLES = [
     "Calculated Slip",
+    "ME Consumption Total",
+    "DG Consumption Total",
+    "Auxiliary Engine Consumption Total",
+    "Boiler Sum",
+    "Total Fuel Consumption",
     "Consumption ME 24 Hours [MT]",
     "SFOC [gr/Kwh]",
-    "Boiler Sum",
 ]
 
 VESSEL_GROUPS = {
@@ -613,10 +788,25 @@ def request_headers(token: str, auth_method: str) -> dict[str, str]:
     return headers
 
 
+def odata_quote(value: str) -> str:
+    return str(value).replace("'", "''")
+
+
+def build_reportdata_value_filter() -> str:
+    value_filters = [
+        f"ValueDescription eq '{odata_quote(value)}'"
+        for value in REPORTDATA_VALUE_WHITELIST
+    ]
+    return "(" + " or ".join(value_filters) + ")"
+
+
 def build_odata_url(start_date: date) -> str:
     start_text = start_date.strftime("%Y-%m-%d")
     params = {
-        "$filter": f"StartDateTimeGMT gt DateTime'{start_text}'",
+        "$filter": (
+            f"StartDateTimeGMT gt DateTime'{start_text}' "
+            f"and {build_reportdata_value_filter()}"
+        ),
         "$select": ",".join(SOURCE_COLUMNS),
     }
     return f"{ODATA_ENDPOINT}?{urlencode(params)}"
@@ -656,7 +846,10 @@ def rows_to_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
 def compact_odata_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     compact_rows: list[dict[str, Any]] = []
     for row in rows:
-        if row.get("ValueDescription") is None:
+        value_description = row.get("ValueDescription")
+        if value_description is None:
+            continue
+        if re.sub(r"[^a-z0-9]+", "", str(value_description).lower()) not in REPORTDATA_VALUE_WHITELIST_KEYS:
             continue
         if row.get("ReportType") in EXCLUDED_REPORT_TYPES:
             continue
@@ -1233,13 +1426,37 @@ def add_performance_calculations(pivot_df: pd.DataFrame, source_table: pd.DataFr
     df["Calculated Slip"] = (1 - safe_divide(distance_over_ground, engine_distance)).round(3)
 
     me_sum = sum_numeric_columns(df, ME_FUEL_COLUMNS)
-    df["Consumption ME 24 Hours [MT]"] = safe_divide(me_sum * 24, lap_time).round(3)
+    official_me_total = pd.to_numeric(df.get("Main Engine Total Consumed"), errors="coerce")
+    df["ME Consumption Total"] = me_sum.fillna(official_me_total).round(3)
+
+    dg_sum = sum_numeric_columns(df, DG_FUEL_COLUMNS)
+    official_dg_total = pd.to_numeric(df.get("Diesel Generator Total Consumed"), errors="coerce")
+    df["DG Consumption Total"] = dg_sum.fillna(official_dg_total).round(3)
+
+    aux_sum = sum_numeric_columns(df, AUXILIARY_FUEL_COLUMNS)
+    official_aux_total = pd.to_numeric(df.get("Auxiliary Engine Total Consumed"), errors="coerce")
+    df["Auxiliary Engine Consumption Total"] = aux_sum.fillna(official_aux_total).round(3)
+
+    df["Boiler Sum"] = sum_numeric_columns(df, BOILER_FUEL_COLUMNS).round(3)
+
+    calculated_total = pd.concat(
+        [
+            pd.to_numeric(df["ME Consumption Total"], errors="coerce"),
+            pd.to_numeric(df["DG Consumption Total"], errors="coerce"),
+            pd.to_numeric(df["Auxiliary Engine Consumption Total"], errors="coerce"),
+            pd.to_numeric(df["Boiler Sum"], errors="coerce"),
+        ],
+        axis=1,
+    ).sum(axis=1, min_count=1)
+    official_total = pd.to_numeric(df.get("Total Fuel Consumed"), errors="coerce")
+    df["Total Fuel Consumption"] = calculated_total.fillna(official_total).round(3)
+
+    df["Consumption ME 24 Hours [MT]"] = safe_divide(df["ME Consumption Total"] * 24, lap_time).round(3)
 
     df["SFOC [gr/Kwh]"] = (
         safe_divide(df["Consumption ME 24 Hours [MT]"], power) / 0.000024
     ).round(3).fillna(0)
 
-    df["Boiler Sum"] = sum_numeric_columns(df, BOILER_FUEL_COLUMNS).round(3)
     return df
 
 
@@ -1888,6 +2105,8 @@ def fetch_report_data_to_snapshot(
         "hit_page_limit": pages >= MAX_ODATA_PAGES,
         "loaded_start_date": start_date.isoformat(),
         "snapshot_format": "parquet",
+        "reportdata_mode": "performance_kpis_value_whitelist",
+        "value_description_whitelist_count": len(REPORTDATA_VALUE_WHITELIST),
     }
     signature = request_signature(username, auth_method, start_date)
     snapshot_payload = {
