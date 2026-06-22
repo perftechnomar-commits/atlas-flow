@@ -799,12 +799,15 @@ def build_reportdata_value_filter() -> str:
 
 
 def build_odata_url(start_date: date) -> str:
+    # Keep the OData request simple. The Marorka OData V1 ReportData endpoint
+    # rejects long ValueDescription OR filters with 404. We therefore request
+    # the date window only, then apply the KPI/consumption ValueDescription
+    # whitelist locally inside compact_odata_rows() page-by-page before writing
+    # to the Parquet snapshot. This preserves the same final dataset while
+    # avoiding invalid/oversized OData URLs.
     start_text = start_date.strftime("%Y-%m-%d")
     params = {
-        "$filter": (
-            f"StartDateTimeGMT gt DateTime'{start_text}' "
-            f"and {build_reportdata_value_filter()}"
-        ),
+        "$filter": f"StartDateTimeGMT gt DateTime'{start_text}'",
         "$select": ",".join(SOURCE_COLUMNS),
     }
     return f"{ODATA_ENDPOINT}?{urlencode(params)}"
@@ -2191,7 +2194,7 @@ def fetch_report_data_to_snapshot(
         "hit_page_limit": pages >= MAX_ODATA_PAGES,
         "loaded_start_date": start_date.isoformat(),
         "snapshot_format": "parquet",
-        "reportdata_mode": "performance_kpis_value_whitelist",
+        "reportdata_mode": "performance_kpis_python_whitelist",
         "value_description_whitelist_count": len(REPORTDATA_VALUE_WHITELIST),
     }
     signature = request_signature(username, auth_method, start_date)
