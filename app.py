@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from html import escape
@@ -14,7 +13,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urljoin
 from zoneinfo import ZoneInfo
-
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -1190,7 +1188,6 @@ def render_wide_source_tab(source_label: str, df: pd.DataFrame, metadata: dict[s
     return output
 
 
-@st.cache_data(show_spinner=False)
 def to_multisource_excel_bytes(
     reportdata_df: pd.DataFrame,
     reportdata_summary_df: pd.DataFrame | None,
@@ -1607,7 +1604,6 @@ def write_table_sheet(writer: Any, df: pd.DataFrame, sheet_name: str, table_name
     add_excel_table(worksheet, table_name)
 
 
-@st.cache_data(show_spinner=False)
 def to_excel_bytes(clean_df: pd.DataFrame, pivot_analysis_df: pd.DataFrame | None = None) -> bytes:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -1616,6 +1612,18 @@ def to_excel_bytes(clean_df: pd.DataFrame, pivot_analysis_df: pd.DataFrame | Non
         if pivot_analysis_df is not None and not pivot_analysis_df.empty:
             write_table_sheet(writer, pivot_analysis_df, "Summary Analysis", "AtlasFlowSummaryAnalysis")
 
+    return output.getvalue()
+
+
+def to_displayed_table_excel_bytes(display_df: pd.DataFrame, sheet_name: str = "Displayed Table") -> bytes:
+    """Export only the table currently visible to the user.
+
+    This avoids preparing multiple hidden sheets during a normal tab export and keeps
+    memory usage lower on Streamlit Cloud.
+    """
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        write_table_sheet(writer, display_df, sheet_name[:31], "AtlasFlowDisplayedTable")
     return output.getvalue()
 
 
@@ -2584,154 +2592,154 @@ def main() -> None:
         )
 
     with tab_table:
-        st.markdown('<div class="section-title">AtlasFlow Pivot Table</div>', unsafe_allow_html=True)
-
-        metric_cols = st.columns(4)
-        metric_cols[0].metric("Displayed rows", f"{len(output_df):,}")
-        metric_cols[1].metric("Selected variables", f"{len(selected_variables):,}")
-        metric_cols[2].metric("Source long rows", f"{len(filtered_long_for_options):,}")
-        metric_cols[3].metric("Available variables", f"{len(variable_options):,}")
-
-        preview_df = output_df.head(TABLE_PREVIEW_ROW_LIMIT)
-        st.dataframe(format_display_dataframe(preview_df), use_container_width=True, hide_index=True)
-        if len(output_df) > TABLE_PREVIEW_ROW_LIMIT:
-            st.caption(
-                f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of {len(output_df):,} rows. "
-                "Use the Excel export for the full filtered pivot table."
-            )
-
-        st.markdown('<div class="section-title">Excel Summary Builder</div>', unsafe_allow_html=True)
-        st.caption(
-            "Configure the optional Summary Analysis sheet. The Clean Dataset sheet always exports the exact table shown above."
-        )
+        st.markdown('<div class="section-title">ReportData Preview & Export</div>', unsafe_allow_html=True)
 
         summary_builder_columns = [column for column in output_df.columns]
         summary_value_options = numeric_column_options(output_df)
 
-        builder_cols = st.columns(3)
-        with builder_cols[0]:
-            previous_summary_groups = st.session_state.get("atlas_export_summary_groups", [])
-            if not isinstance(previous_summary_groups, list):
-                previous_summary_groups = []
-            default_summary_groups = [column for column in ["ShipName", "ReportType"] if column in summary_builder_columns]
-            valid_summary_group_defaults = [
-                column for column in previous_summary_groups
-                if column in summary_builder_columns
-            ]
-            if not valid_summary_group_defaults and "atlas_export_summary_groups" not in st.session_state:
-                valid_summary_group_defaults = default_summary_groups
-            if valid_summary_group_defaults != previous_summary_groups:
-                st.session_state["atlas_export_summary_groups"] = valid_summary_group_defaults
+        st.caption(
+            "Choose which table you want to preview and export. The visible table below is the same table prepared for Excel."
+        )
+        preview_mode = st.radio(
+            "Preview table",
+            options=["Clean dataset", "Summary analysis"],
+            horizontal=True,
+            key="atlas_reportdata_preview_mode",
+        )
 
-            summary_group_fields = st.multiselect(
-                "Group by fields",
-                options=summary_builder_columns,
-                default=valid_summary_group_defaults,
-                key="atlas_export_summary_groups",
-                help="Choose the fields that define each summary row.",
-            )
-        with builder_cols[1]:
-            previous_summary_values = st.session_state.get("atlas_export_summary_values", [])
-            if not isinstance(previous_summary_values, list):
-                previous_summary_values = []
-            valid_summary_value_defaults = [
-                column for column in previous_summary_values
-                if column in summary_value_options
-            ]
-            if valid_summary_value_defaults != previous_summary_values:
-                st.session_state["atlas_export_summary_values"] = valid_summary_value_defaults
+        if preview_mode == "Summary analysis":
+            st.markdown('<div class="section-title">Summary Builder</div>', unsafe_allow_html=True)
+            builder_cols = st.columns(3)
+            with builder_cols[0]:
+                previous_summary_groups = st.session_state.get("atlas_export_summary_groups", [])
+                if not isinstance(previous_summary_groups, list):
+                    previous_summary_groups = []
+                default_summary_groups = [column for column in ["ShipName", "ReportType"] if column in summary_builder_columns]
+                valid_summary_group_defaults = [
+                    column for column in previous_summary_groups
+                    if column in summary_builder_columns
+                ]
+                if not valid_summary_group_defaults and "atlas_export_summary_groups" not in st.session_state:
+                    valid_summary_group_defaults = default_summary_groups
+                if valid_summary_group_defaults != previous_summary_groups:
+                    st.session_state["atlas_export_summary_groups"] = valid_summary_group_defaults
 
-            summary_value_fields = st.multiselect(
-                "Value fields",
-                options=summary_value_options,
-                default=valid_summary_value_defaults,
-                key="atlas_export_summary_values",
-                help="Choose one or more numeric columns to aggregate.",
-            )
-        with builder_cols[2]:
-            summary_aggregation = st.selectbox(
-                "Aggregation",
-                options=["Average", "Sum", "Count", "Minimum", "Maximum", "Median"],
-                index=0,
-                key="atlas_export_summary_aggregation",
-            )
+                summary_group_fields = st.multiselect(
+                    "Group by fields",
+                    options=summary_builder_columns,
+                    default=valid_summary_group_defaults,
+                    key="atlas_export_summary_groups",
+                    help="Choose the fields that define each summary row.",
+                )
+            with builder_cols[1]:
+                previous_summary_values = st.session_state.get("atlas_export_summary_values", [])
+                if not isinstance(previous_summary_values, list):
+                    previous_summary_values = []
+                valid_summary_value_defaults = [
+                    column for column in previous_summary_values
+                    if column in summary_value_options
+                ]
+                if valid_summary_value_defaults != previous_summary_values:
+                    st.session_state["atlas_export_summary_values"] = valid_summary_value_defaults
+
+                summary_value_fields = st.multiselect(
+                    "Value fields",
+                    options=summary_value_options,
+                    default=valid_summary_value_defaults,
+                    key="atlas_export_summary_values",
+                    help="Choose one or more numeric columns to aggregate.",
+                )
+            with builder_cols[2]:
+                summary_aggregation = st.selectbox(
+                    "Aggregation",
+                    options=["Average", "Sum", "Count", "Minimum", "Maximum", "Median"],
+                    index=0,
+                    key="atlas_export_summary_aggregation",
+                )
+        else:
+            summary_group_fields = st.session_state.get("atlas_export_summary_groups", [])
+            if not isinstance(summary_group_fields, list):
+                summary_group_fields = []
+            summary_value_fields = st.session_state.get("atlas_export_summary_values", [])
+            if not isinstance(summary_value_fields, list):
+                summary_value_fields = []
+            summary_aggregation = st.session_state.get("atlas_export_summary_aggregation", "Average")
 
         summary_can_build = bool(summary_group_fields and summary_value_fields)
-        if summary_can_build:
-            st.caption(
-                "Summary Analysis will be generated only when you click Prepare Excel download, "
-                "so changing fleet/variable selections does not overload the live app."
+        if preview_mode == "Summary analysis" and summary_can_build:
+            displayed_table_df = build_summary_analysis(
+                output_df,
+                group_fields=summary_group_fields,
+                value_fields=summary_value_fields,
+                aggregation=summary_aggregation,
             )
+            export_sheet_name = "Summary Analysis"
+        elif preview_mode == "Summary analysis":
+            displayed_table_df = pd.DataFrame()
+            export_sheet_name = "Summary Analysis"
+            st.info("Select at least one Group by field and one Value field to preview Summary Analysis.")
         else:
-            st.caption("Summary Analysis sheet will be skipped unless at least one group field and one value field are selected.")
+            displayed_table_df = output_df.copy()
+            export_sheet_name = "Clean Dataset"
+
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Displayed rows", f"{len(displayed_table_df):,}")
+        metric_cols[1].metric("Selected variables", f"{len(selected_variables):,}")
+        metric_cols[2].metric("Source long rows", f"{len(filtered_long_for_options):,}")
+        metric_cols[3].metric("Available variables", f"{len(variable_options):,}")
+
+        st.dataframe(
+            format_display_dataframe(displayed_table_df.head(TABLE_PREVIEW_ROW_LIMIT)),
+            use_container_width=True,
+            hide_index=True,
+        )
+        if len(displayed_table_df) > TABLE_PREVIEW_ROW_LIMIT:
+            st.caption(
+                f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of {len(displayed_table_df):,} rows. "
+                "Excel export includes the full displayed table."
+            )
 
         export_signature_payload = "|".join([
+            preview_mode,
             ",".join(selected_vessels),
             selected_start.isoformat(),
             selected_end.isoformat(),
             ",".join(display_columns),
             ",".join(selected_variables),
             str(len(output_df)),
-            str(len(filtered_long_for_options)),
+            str(len(displayed_table_df)),
             ",".join(summary_group_fields),
             ",".join(summary_value_fields),
-            summary_aggregation,
+            str(summary_aggregation),
+            ",".join(displayed_table_df.columns.astype(str).tolist()) if not displayed_table_df.empty else "empty",
         ])
         current_export_signature = sha256(export_signature_payload.encode("utf-8")).hexdigest()
-
-        prepared_summary_df = st.session_state.get("atlas_summary_analysis_df")
-        summary_preview_ready = (
-            st.session_state.get("atlas_export_signature") == current_export_signature
-            and isinstance(prepared_summary_df, pd.DataFrame)
-            and not prepared_summary_df.empty
-        )
-        if summary_preview_ready:
-            with st.expander("Preview Summary Analysis", expanded=False):
-                st.dataframe(
-                    format_display_dataframe(prepared_summary_df.head(TABLE_PREVIEW_ROW_LIMIT)),
-                    use_container_width=True,
-                    hide_index=True,
-                )
 
         export_ready = (
             st.session_state.get("atlas_export_signature") == current_export_signature
             and "atlas_export_bytes" in st.session_state
         )
 
-        if st.button("Prepare Excel download", type="primary"):
+        if st.button("Prepare displayed table Excel", type="primary", disabled=displayed_table_df.empty):
             with st.spinner("Preparing Excel file..."):
-                summary_analysis_df = pd.DataFrame()
-                if summary_can_build:
-                    summary_analysis_df = build_summary_analysis(
-                        output_df,
-                        group_fields=summary_group_fields,
-                        value_fields=summary_value_fields,
-                        aggregation=summary_aggregation,
-                    )
-                st.session_state["atlas_export_bytes"] = to_excel_bytes(
-                    output_df,
-                    summary_analysis_df if not summary_analysis_df.empty else None,
+                st.session_state["atlas_export_bytes"] = to_displayed_table_excel_bytes(
+                    displayed_table_df,
+                    sheet_name=export_sheet_name,
                 )
-                st.session_state["atlas_summary_analysis_df"] = summary_analysis_df
+                st.session_state["atlas_summary_analysis_df"] = displayed_table_df if preview_mode == "Summary analysis" else pd.DataFrame()
                 st.session_state["atlas_export_signature"] = current_export_signature
-            if not st.session_state["atlas_summary_analysis_df"].empty:
-                with st.expander("Preview Summary Analysis", expanded=False):
-                    st.dataframe(
-                        format_display_dataframe(st.session_state["atlas_summary_analysis_df"].head(TABLE_PREVIEW_ROW_LIMIT)),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                gc.collect()
             export_ready = True
 
         if export_ready:
             st.download_button(
-                "Download AtlasFlow Excel",
+                "Download displayed table Excel",
                 data=st.session_state["atlas_export_bytes"],
-                file_name="atlasflow_export.xlsx",
+                file_name="atlasflow_displayed_table.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         else:
-            st.caption("Excel generation is prepared on demand so normal dashboard loads stay faster.")
+            st.caption("Excel generation is prepared on demand. The download will contain only the visible table above.")
 
     with tab_reportpivots:
         reportpivots_output_df = render_wide_source_tab(
