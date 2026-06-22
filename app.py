@@ -1049,7 +1049,7 @@ def load_source_snapshot(
         if not raw_data_covers_request(signature, metadata, requested_signature, requested_start_date):
             return None
         df = pd.read_parquet(snapshot_file)
-        if not isinstance(df, pd.DataFrame) or df.empty:
+        if not isinstance(df, pd.DataFrame):
             return None
         metadata = metadata.copy()
         metadata["loaded_from_snapshot"] = True
@@ -2297,19 +2297,24 @@ def fetch_wide_source_to_snapshot(
     target_file.parent.mkdir(parents=True, exist_ok=True)
 
     if row_count == 0:
-        # Some pyarrow versions do not reliably materialize a completely columnless
-        # empty parquet file. Keep an explicit marker column so the snapshot file
-        # exists and the warmup can finish gracefully even when the API returns no rows.
+        # Some wide endpoints can legally return no rows for the selected API window.
+        # Always materialize a tiny, valid parquet snapshot so the warmup finishes
+        # cleanly instead of failing at the final replace step.
         empty_columns = all_columns if all_columns else ["NoData"]
         empty_df = normalize_snapshot_values(pd.DataFrame(columns=empty_columns))
-        empty_table = pa.Table.from_pandas(empty_df, preserve_index=False)
-        pq.write_table(empty_table, tmp_file, compression="zstd")
-        del empty_df, empty_table
+        empty_df.to_parquet(tmp_file, index=False, compression="zstd")
+        del empty_df
 
     if not tmp_file.exists():
-        raise FileNotFoundError(f"Snapshot temporary file was not created: {tmp_file}")
+        # Last-resort guard for Streamlit Cloud / pyarrow edge cases.
+        fallback_df = pd.DataFrame({"NoData": pd.Series(dtype="string")})
+        fallback_df.to_parquet(tmp_file, index=False, compression="zstd")
+        del fallback_df
 
-    tmp_file.replace(target_file)
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    if target_file.exists():
+        target_file.unlink()
+    os.replace(str(tmp_file), str(target_file))
     loaded_at_utc = datetime.now(timezone.utc)
     metadata = {
         "source": config["label"],
@@ -2586,7 +2591,7 @@ def main() -> None:
 
     output_df = filtered_pivot_df[display_columns].copy()
 
-    tab_table, tab_reportpivots, tab_shippivots, tab_export, tab_diagnostics, tab_raw = st.tabs(["ReportData", "ReportPivots", "ShipPivots", "Export Center", "API Diagnostics", "Long Data"])
+    tab_table, tab_reportpivots, tab_shippivots, tab_export, tab_diagnostics, tab_raw = st.tabs(["ReportData Explorer", "ReportPivots", "ShipPivots", "Export Center", "API Diagnostics", "Long Data"])
 
     if metadata.get("hit_page_limit"):
         st.warning(
