@@ -820,6 +820,252 @@ def apply_custom_css() -> None:
             background: #FFFFFF !important;
         }
 
+
+
+        /* Final SaaS white/teal polish */
+        :root {
+            --bg: #F6FBFA;
+            --bg-deep: #EEF7F6;
+            --panel: #FFFFFF;
+            --panel-soft: #F8FCFB;
+            --text: #0B1F33;
+            --text-soft: #475569;
+            --primary: #006B66;
+            --secondary: #00A6A0;
+            --accent: #0F766E;
+            --sidebar-bg: #00645F;
+            --sidebar-bg-deep: #003F3B;
+            --sidebar-text: #FFFFFF;
+            --sidebar-text-soft: #D7FFFA;
+        }
+
+        html, body, .stApp {
+            font-family: "Aptos", "Segoe UI", "Inter", system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
+        }
+
+        .stApp {
+            background:
+                radial-gradient(circle at top right, rgba(0, 166, 160, 0.11), transparent 38rem),
+                radial-gradient(circle at top left, rgba(0, 107, 102, 0.08), transparent 32rem),
+                linear-gradient(180deg, #FFFFFF 0%, #F6FBFA 48%, #EEF7F6 100%) !important;
+        }
+
+        .block-container {
+            max-width: 1450px !important;
+            padding-top: 3.1rem !important;
+        }
+
+        header[data-testid="stHeader"] {
+            background: rgba(255, 255, 255, 0.84) !important;
+            border-bottom: 1px solid rgba(15, 23, 42, 0.08) !important;
+            backdrop-filter: blur(10px) !important;
+        }
+
+        section[data-testid="stSidebar"] {
+            background:
+                radial-gradient(circle at top left, rgba(20, 184, 166, 0.26), transparent 18rem),
+                linear-gradient(180deg, var(--sidebar-bg) 0%, var(--sidebar-bg-deep) 100%) !important;
+            border-right: 1px solid rgba(255, 255, 255, 0.14) !important;
+            box-shadow: 14px 0 34px rgba(15, 23, 42, 0.12) !important;
+        }
+
+        /* Sidebar labels must stay white on dark teal */
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] label p,
+        section[data-testid="stSidebar"] label span,
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] span,
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+            color: var(--sidebar-text) !important;
+            -webkit-text-fill-color: var(--sidebar-text) !important;
+            font-weight: 750 !important;
+        }
+
+        section[data-testid="stSidebar"] .stCaptionContainer,
+        section[data-testid="stSidebar"] small,
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+            color: var(--sidebar-text-soft) !important;
+            -webkit-text-fill-color: var(--sidebar-text-soft) !important;
+        }
+
+        section[data-testid="stSidebar"] button[kind="primary"],
+        section[data-testid="stSidebar"] .stButton button {
+            background: linear-gradient(135deg, #008D86, #0CC9C2) !important;
+            border: 1px solid rgba(255, 255, 255, 0.28) !important;
+            color: #FFFFFF !important;
+            border-radius: 14px !important;
+            box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18) !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-baseweb="select"] > div,
+        section[data-testid="stSidebar"] div[data-baseweb="input"],
+        section[data-testid="stSidebar"] [data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
+        section[data-testid="stSidebar"] [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            background: #FFFFFF !important;
+            border: 1px solid rgba(255, 255, 255, 0.48) !important;
+            border-radius: 14px !important;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12) !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-baseweb="select"] span,
+        section[data-testid="stSidebar"] div[data-baseweb="select"] input,
+        section[data-testid="stSidebar"] div[data-baseweb="input"] input {
+            color: var(--text) !important;
+            -webkit-text-fill-color: var(--text) !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="tag"] {
+            background: #D7F4F1 !important;
+            border: 1px solid rgba(0, 107, 102, 0.26) !important;
+            border-radius: 999px !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="tag"] span,
+        section[data-testid="stSidebar"] [data-baseweb="tag"] svg {
+            color: #12313E !important;
+            -webkit-text-fill-color: #12313E !important;
+            fill: #12313E !important;
+        }
+
+        .dashboard-hero {
+            padding: 2.0rem 2.15rem !important;
+            border-radius: 22px !important;
+            border: 1px solid rgba(0, 107, 102, 0.18) !important;
+            background:
+                linear-gradient(135deg, rgba(255,255,255,0.98), rgba(248,252,251,0.94)) !important;
+            box-shadow:
+                0 18px 52px rgba(15, 23, 42, 0.10),
+                inset 0 1px 0 rgba(255, 255, 255, 0.92) !important;
+        }
+
+        .eyebrow {
+            color: #007C77 !important;
+            letter-spacing: 0.18em !important;
+            font-weight: 900 !important;
+        }
+
+        .dashboard-title {
+            color: #0B1F33 !important;
+            font-family: "Aptos Display", "Aptos", "Segoe UI", system-ui, sans-serif !important;
+            font-size: clamp(2.7rem, 4.2vw, 4.6rem) !important;
+            font-weight: 950 !important;
+            letter-spacing: -0.04em !important;
+            line-height: 0.98 !important;
+        }
+
+        .dashboard-subtitle {
+            color: #334155 !important;
+            font-weight: 500 !important;
+        }
+
+        .api-load-caption,
+        .atlas-pill {
+            background: rgba(255,255,255,0.92) !important;
+            border: 1px solid rgba(0, 107, 102, 0.18) !important;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06) !important;
+            color: #334155 !important;
+        }
+
+        button[data-baseweb="tab"] {
+            color: #475569 !important;
+            font-weight: 750 !important;
+        }
+
+        button[data-baseweb="tab"][aria-selected="true"] {
+            color: #007C77 !important;
+        }
+
+        div[data-baseweb="tab-highlight"] {
+            background-color: #00A6A0 !important;
+            height: 3px !important;
+        }
+
+        .section-title,
+        .stApp h1,
+        .stApp h2,
+        .stApp h3,
+        .stApp h4,
+        .stApp strong {
+            color: #0B1F33 !important;
+            -webkit-text-fill-color: #0B1F33 !important;
+        }
+
+        .stApp [data-testid="stCaptionContainer"] p,
+        .stApp [data-testid="stMarkdownContainer"] p {
+            color: #475569 !important;
+            -webkit-text-fill-color: #475569 !important;
+        }
+
+        [data-testid="stRadio"] label,
+        [data-testid="stRadio"] label span,
+        [data-testid="stRadio"] p {
+            color: #0B1F33 !important;
+            -webkit-text-fill-color: #0B1F33 !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label {
+            background: #FFFFFF !important;
+            border: 1px solid rgba(0, 107, 102, 0.13) !important;
+            border-radius: 999px !important;
+            padding: 0.30rem 0.70rem !important;
+            box-shadow: 0 4px 12px rgba(15,23,42,0.04) !important;
+        }
+
+        div[data-testid="stMetric"] {
+            background: #FFFFFF !important;
+            border: 1px solid rgba(0, 107, 102, 0.14) !important;
+            border-radius: 18px !important;
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08) !important;
+            min-height: 92px !important;
+        }
+
+        div[data-testid="stMetricLabel"] p,
+        div[data-testid="stMetricLabel"] span {
+            color: #334155 !important;
+            -webkit-text-fill-color: #334155 !important;
+            font-weight: 700 !important;
+        }
+
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricValue"] div,
+        div[data-testid="stMetricValue"] span {
+            color: #0B1F33 !important;
+            -webkit-text-fill-color: #0B1F33 !important;
+            font-weight: 950 !important;
+        }
+
+        div[data-testid="stDataFrame"] {
+            border: 1px solid rgba(0, 107, 102, 0.16) !important;
+            border-radius: 16px !important;
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.09) !important;
+            background: #FFFFFF !important;
+        }
+
+        .stDownloadButton button,
+        .stButton button {
+            background: linear-gradient(135deg, #007C77, #0BBDB6) !important;
+            border: 1px solid rgba(0, 107, 102, 0.34) !important;
+            border-radius: 14px !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font-weight: 850 !important;
+        }
+
+        [data-testid="stExpander"] {
+            background: rgba(255,255,255,0.06) !important;
+            border: 1px solid rgba(255,255,255,0.18) !important;
+            border-radius: 12px !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stExpander"] summary,
+        section[data-testid="stSidebar"] [data-testid="stExpander"] summary p,
+        section[data-testid="stSidebar"] [data-testid="stExpander"] summary span {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
