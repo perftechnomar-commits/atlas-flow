@@ -2618,7 +2618,7 @@ def main() -> None:
 
     output_df = filtered_pivot_df[display_columns].copy()
 
-    tab_table, tab_reportpivots, tab_shippivots, tab_export, tab_diagnostics, tab_raw = st.tabs(["ReportData", "ReportPivots", "ShipPivots", "Export Center", "API Diagnostics", "Long Data"])
+    tab_table, tab_reportpivots, tab_shippivots, tab_export, tab_diagnostics, tab_raw = st.tabs(["Custom Analytics", "Noon & Manual Reports", "15-Minute Operations", "Export Center", "API Diagnostics", "Long Data"])
 
     if metadata.get("hit_page_limit"):
         st.warning(
