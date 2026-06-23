@@ -2618,7 +2618,13 @@ def main() -> None:
 
     output_df = filtered_pivot_df[display_columns].copy()
 
-    tab_table, tab_reportpivots, tab_shippivots, tab_export, tab_diagnostics, tab_raw = st.tabs(["Custom Analytics", "Noon & Manual Reports", "15-Minute Operations", "Export Center", "API Diagnostics", "Long Data"])
+    tab_table, tab_reportpivots, tab_shippivots, tab_export, tab_diagnostics = st.tabs([
+        "Custom Analytics",
+        "Noon & Manual Reports",
+        "15-Minute Operations",
+        "Export Center",
+        "API Diagnostics",
+    ])
 
     if metadata.get("hit_page_limit"):
         st.warning(
@@ -2627,7 +2633,7 @@ def main() -> None:
         )
 
     with tab_table:
-        st.markdown('<div class="section-title">ReportData Preview & Export</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Custom Analytics Preview & Export</div>', unsafe_allow_html=True)
 
         summary_builder_columns = [column for column in output_df.columns]
         summary_value_options = numeric_column_options(output_df)
@@ -2637,12 +2643,12 @@ def main() -> None:
         )
         preview_mode = st.radio(
             "Preview table",
-            options=["Clean dataset", "Summary analysis"],
+            options=["Clean Dataset", "Summary Analysis", "Source Data"],
             horizontal=True,
             key="atlas_reportdata_preview_mode",
         )
 
-        if preview_mode == "Summary analysis":
+        if preview_mode == "Summary Analysis":
             st.markdown('<div class="section-title">Summary Builder</div>', unsafe_allow_html=True)
             builder_cols = st.columns(3)
             with builder_cols[0]:
@@ -2701,7 +2707,7 @@ def main() -> None:
             summary_aggregation = st.session_state.get("atlas_export_summary_aggregation", "Average")
 
         summary_can_build = bool(summary_group_fields and summary_value_fields)
-        if preview_mode == "Summary analysis" and summary_can_build:
+        if preview_mode == "Summary Analysis" and summary_can_build:
             displayed_table_df = build_summary_analysis(
                 output_df,
                 group_fields=summary_group_fields,
@@ -2709,10 +2715,14 @@ def main() -> None:
                 aggregation=summary_aggregation,
             )
             export_sheet_name = "Summary Analysis"
-        elif preview_mode == "Summary analysis":
+        elif preview_mode == "Summary Analysis":
             displayed_table_df = pd.DataFrame()
             export_sheet_name = "Summary Analysis"
             st.info("Select at least one Group by field and one Value field to preview Summary Analysis.")
+        elif preview_mode == "Source Data":
+            source_columns = [column for column in [*SOURCE_COLUMNS, "ParsedValue"] if column in filtered_long_for_options.columns]
+            displayed_table_df = filtered_long_for_options[source_columns].copy()
+            export_sheet_name = "Source Data"
         else:
             displayed_table_df = output_df.copy()
             export_sheet_name = "Clean Dataset"
@@ -2761,7 +2771,7 @@ def main() -> None:
                     displayed_table_df,
                     sheet_name=export_sheet_name,
                 )
-                st.session_state["atlas_summary_analysis_df"] = displayed_table_df if preview_mode == "Summary analysis" else pd.DataFrame()
+                st.session_state["atlas_summary_analysis_df"] = displayed_table_df if preview_mode == "Summary Analysis" else pd.DataFrame()
                 st.session_state["atlas_export_signature"] = current_export_signature
                 gc.collect()
             export_ready = True
@@ -2778,7 +2788,7 @@ def main() -> None:
 
     with tab_reportpivots:
         reportpivots_output_df = render_wide_source_tab(
-            "ReportPivots",
+            "Noon & Manual Reports",
             reportpivots_df,
             reportpivots_metadata,
             "reportpivots",
@@ -2789,7 +2799,7 @@ def main() -> None:
 
     with tab_shippivots:
         shippivots_output_df = render_wide_source_tab(
-            "ShipPivots",
+            "15-Minute Operations",
             shippivots_df,
             shippivots_metadata,
             "shippivots",
@@ -2800,11 +2810,11 @@ def main() -> None:
 
     with tab_export:
         st.markdown('<div class="section-title">AtlasFlow Export Center</div>', unsafe_allow_html=True)
-        st.caption("Prepare a single workbook with ReportData, ReportPivots, and ShipPivots sheets from the current fleet/period selections.")
+        st.caption("Prepare a single workbook with Custom Analytics, Noon & Manual Reports, and 15-Minute Operations sheets from the current fleet/period selections.")
         export_cols = st.columns(3)
-        export_cols[0].metric("ReportData rows", f"{len(output_df):,}")
-        export_cols[1].metric("ReportPivots rows", f"{len(reportpivots_output_df):,}")
-        export_cols[2].metric("ShipPivots rows", f"{len(shippivots_output_df):,}")
+        export_cols[0].metric("Custom Analytics rows", f"{len(output_df):,}")
+        export_cols[1].metric("Noon & Manual Reports rows", f"{len(reportpivots_output_df):,}")
+        export_cols[2].metric("15-Minute Operations rows", f"{len(shippivots_output_df):,}")
 
         multisource_signature_payload = "|".join([
             current_export_signature,
@@ -2921,13 +2931,6 @@ def main() -> None:
         else:
             st.caption("Variable counts are calculated on demand so diagnostics do not slow normal loads.")
 
-    with tab_raw:
-        st.markdown('<div class="section-title">Filtered Long Data</div>', unsafe_allow_html=True)
-        raw_preview_columns = [column for column in SOURCE_COLUMNS if column in filtered_long_for_options.columns]
-        raw_preview = filtered_long_for_options[raw_preview_columns].head(TABLE_PREVIEW_ROW_LIMIT).copy()
-        st.dataframe(format_display_dataframe(raw_preview), use_container_width=True, hide_index=True)
-        if len(filtered_long_for_options) > TABLE_PREVIEW_ROW_LIMIT:
-            st.caption(f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of {len(filtered_long_for_options):,} long rows.")
 
 
 if __name__ == "__main__":
