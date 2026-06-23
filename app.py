@@ -655,6 +655,171 @@ def apply_custom_css() -> None:
         div[data-testid="stSlider"] {
             accent-color: var(--secondary) !important;
         }
+
+
+        /* White/teal readability fixes */
+        .stApp,
+        .stApp p,
+        .stApp span,
+        .stApp label,
+        .stApp div {
+            color: var(--text);
+        }
+
+        .stApp [data-testid="stMarkdownContainer"] p,
+        .stApp [data-testid="stMarkdownContainer"] span,
+        .stApp [data-testid="stCaptionContainer"],
+        .stApp [data-testid="stCaptionContainer"] p {
+            color: var(--text-soft) !important;
+        }
+
+        .stApp h1,
+        .stApp h2,
+        .stApp h3,
+        .stApp h4,
+        .stApp h5,
+        .stApp h6,
+        .stApp strong {
+            color: var(--text) !important;
+        }
+
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] div,
+        section[data-testid="stSidebar"] small {
+            color: var(--sidebar-text) !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p,
+        section[data-testid="stSidebar"] small {
+            color: var(--sidebar-text-soft) !important;
+        }
+
+        /* Inputs and dropdowns: keep white panels readable */
+        div[data-baseweb="select"] > div,
+        div[data-baseweb="input"],
+        [data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
+        [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            background: #FFFFFF !important;
+            color: var(--text) !important;
+        }
+
+        div[data-baseweb="select"] span,
+        div[data-baseweb="select"] input,
+        div[data-baseweb="input"] input,
+        [data-testid="stTextInput"] input {
+            color: var(--text) !important;
+            -webkit-text-fill-color: var(--text) !important;
+        }
+
+        div[data-baseweb="select"] svg,
+        div[data-baseweb="input"] svg {
+            color: var(--text-soft) !important;
+            fill: var(--text-soft) !important;
+        }
+
+        [data-baseweb="popover"],
+        [data-baseweb="menu"],
+        [role="listbox"] {
+            background: #FFFFFF !important;
+            color: var(--text) !important;
+        }
+
+        [role="option"],
+        [role="option"] span,
+        [data-baseweb="menu"] li,
+        [data-baseweb="menu"] span {
+            color: var(--text) !important;
+            -webkit-text-fill-color: var(--text) !important;
+        }
+
+        [role="option"]:hover,
+        [data-baseweb="menu"] li:hover {
+            background: rgba(20, 184, 166, 0.10) !important;
+        }
+
+        /* Multiselect chips: visible text on light chip */
+        [data-baseweb="tag"] {
+            background: #DDF7F2 !important;
+            border: 1px solid rgba(15, 118, 110, 0.32) !important;
+            color: #0F172A !important;
+        }
+
+        [data-baseweb="tag"] span,
+        [data-baseweb="tag"] svg,
+        section[data-testid="stSidebar"] [data-baseweb="tag"] span,
+        section[data-testid="stSidebar"] [data-baseweb="tag"] svg {
+            color: #0F172A !important;
+            fill: #0F172A !important;
+            -webkit-text-fill-color: #0F172A !important;
+        }
+
+        /* Radio controls and helper text */
+        [data-testid="stRadio"] label,
+        [data-testid="stRadio"] label span,
+        [data-testid="stRadio"] div,
+        [data-testid="stRadio"] p {
+            color: var(--text) !important;
+            -webkit-text-fill-color: var(--text) !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label {
+            background: rgba(255, 255, 255, 0.64) !important;
+            border-radius: 999px !important;
+            padding: 0.18rem 0.45rem !important;
+        }
+
+        /* Buttons should remain readable on teal gradients */
+        .stDownloadButton button,
+        .stButton button {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        .stDownloadButton button p,
+        .stButton button p,
+        .stDownloadButton button span,
+        .stButton button span {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        /* Metrics and cards */
+        div[data-testid="stMetricLabel"] p,
+        div[data-testid="stMetricLabel"] span {
+            color: var(--text-soft) !important;
+            -webkit-text-fill-color: var(--text-soft) !important;
+        }
+
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricValue"] div,
+        div[data-testid="stMetricValue"] span {
+            color: var(--text) !important;
+            -webkit-text-fill-color: var(--text) !important;
+        }
+
+        /* Expanders */
+        [data-testid="stExpander"],
+        [data-testid="stExpander"] div,
+        [data-testid="stExpander"] span,
+        [data-testid="stExpander"] p {
+            color: var(--text) !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stExpander"],
+        section[data-testid="stSidebar"] [data-testid="stExpander"] div,
+        section[data-testid="stSidebar"] [data-testid="stExpander"] span,
+        section[data-testid="stSidebar"] [data-testid="stExpander"] p {
+            color: var(--sidebar-text) !important;
+        }
+
+        /* Dataframe light frame. Streamlit grid internals may still use their own theme, but headers/captions remain visible. */
+        div[data-testid="stDataFrame"] {
+            background: #FFFFFF !important;
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
