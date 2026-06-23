@@ -362,26 +362,30 @@ def apply_custom_css() -> None:
         """
         <style>
         :root {
-            --bg: #090A1A;
-            --bg-deep: #050615;
-            --panel: #12152B;
-            --panel-soft: #191D3A;
-            --panel-glass: rgba(18, 21, 43, 0.74);
-            --border: rgba(139, 92, 246, 0.34);
-            --border-strong: rgba(167, 139, 250, 0.56);
-            --text: #F8FAFC;
-            --text-soft: #B8C0D9;
-            --primary: #8B5CF6;
-            --secondary: #22D3EE;
-            --accent: #A78BFA;
-            --input-bg: rgba(8, 10, 28, 0.92);
+            --bg: #F7FAFA;
+            --bg-deep: #EAF3F2;
+            --panel: #FFFFFF;
+            --panel-soft: #F0F7F6;
+            --panel-glass: rgba(255, 255, 255, 0.86);
+            --border: rgba(15, 118, 110, 0.22);
+            --border-strong: rgba(15, 118, 110, 0.42);
+            --text: #0F172A;
+            --text-soft: #475569;
+            --primary: #0F766E;
+            --secondary: #14B8A6;
+            --accent: #0D9488;
+            --input-bg: rgba(255, 255, 255, 0.96);
+            --sidebar-bg: #073B3A;
+            --sidebar-bg-deep: #042F2E;
+            --sidebar-text: #F8FAFC;
+            --sidebar-text-soft: #CCFBF1;
         }
 
         .stApp {
             background:
-                radial-gradient(circle at top left, rgba(139, 92, 246, 0.24), transparent 34rem),
-                radial-gradient(circle at top right, rgba(34, 211, 238, 0.12), transparent 30rem),
-                linear-gradient(180deg, rgba(167, 139, 250, 0.06), transparent 24rem),
+                radial-gradient(circle at top left, rgba(20, 184, 166, 0.16), transparent 34rem),
+                radial-gradient(circle at top right, rgba(15, 118, 110, 0.10), transparent 30rem),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(234, 243, 242, 0.74)),
                 var(--bg);
             background-position: center center;
             background-size: cover;
@@ -406,8 +410,8 @@ def apply_custom_css() -> None:
 
         section[data-testid="stSidebar"] {
             background:
-                radial-gradient(circle at top left, rgba(139, 92, 246, 0.16), transparent 18rem),
-                linear-gradient(180deg, #0E1024 0%, #050615 100%) !important;
+                radial-gradient(circle at top left, rgba(20, 184, 166, 0.18), transparent 18rem),
+                linear-gradient(180deg, var(--sidebar-bg) 0%, var(--sidebar-bg-deep) 100%) !important;
             border-right: 1px solid var(--border);
         }
 
@@ -422,7 +426,7 @@ def apply_custom_css() -> None:
         section[data-testid="stSidebar"] label,
         section[data-testid="stSidebar"] p,
         section[data-testid="stSidebar"] span {
-            color: var(--text) !important;
+            color: var(--sidebar-text) !important;
         }
 
         section[data-testid="stSidebar"] label {
@@ -432,14 +436,21 @@ def apply_custom_css() -> None:
         section[data-testid="stSidebar"] h1,
         section[data-testid="stSidebar"] h2,
         section[data-testid="stSidebar"] h3 {
-            color: var(--text) !important;
+            color: var(--sidebar-text) !important;
+        }
+
+
+        section[data-testid="stSidebar"] small,
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+            color: var(--sidebar-text-soft) !important;
         }
 
         div[data-baseweb="select"] > div,
         div[data-baseweb="input"],
         textarea {
             background-color: var(--input-bg) !important;
-            border: 1px solid rgba(139, 92, 246, 0.30) !important;
+            border: 1px solid rgba(15, 118, 110, 0.22) !important;
             border-radius: 14px !important;
             box-shadow: none !important;
             outline: none !important;
@@ -450,7 +461,7 @@ def apply_custom_css() -> None:
         div[data-baseweb="select"] > div:hover,
         div[data-baseweb="input"]:hover,
         textarea:hover {
-            border-color: rgba(34, 211, 238, 0.42) !important;
+            border-color: rgba(20, 184, 166, 0.52) !important;
         }
 
         div[data-baseweb="select"] > div:focus-within,
@@ -489,8 +500,8 @@ def apply_custom_css() -> None:
         }
 
         [data-baseweb="tag"] {
-            background: linear-gradient(135deg, rgba(139, 92, 246, 0.34), rgba(34, 211, 238, 0.16)) !important;
-            border: 1px solid rgba(167, 139, 250, 0.52) !important;
+            background: linear-gradient(135deg, rgba(15, 118, 110, 0.14), rgba(20, 184, 166, 0.12)) !important;
+            border: 1px solid rgba(15, 118, 110, 0.34) !important;
             color: var(--text) !important;
             border-radius: 999px !important;
         }
@@ -505,11 +516,11 @@ def apply_custom_css() -> None:
             border: 1px solid var(--border);
             border-radius: 24px;
             background:
-                linear-gradient(135deg, rgba(18, 21, 43, 0.92), rgba(8, 10, 28, 0.74)),
-                linear-gradient(90deg, rgba(139, 92, 246, 0.18), rgba(34, 211, 238, 0.08));
+                linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 247, 246, 0.90)),
+                linear-gradient(90deg, rgba(15, 118, 110, 0.12), rgba(20, 184, 166, 0.08));
             box-shadow:
-                0 24px 70px rgba(0, 0, 0, 0.34),
-                inset 0 1px 0 rgba(167, 139, 250, 0.26);
+                0 20px 54px rgba(15, 23, 42, 0.10),
+                inset 0 1px 0 rgba(255, 255, 255, 0.84);
             backdrop-filter: blur(10px);
             margin-bottom: 1.1rem;
         }
@@ -529,14 +540,14 @@ def apply_custom_css() -> None:
             font-weight: 950;
             color: var(--text);
             margin: 0;
-            text-shadow: 0 3px 16px rgba(0, 0, 0, 0.74);
+            text-shadow: none;
         }
 
         .dashboard-subtitle {
             color: var(--text-soft);
             font-size: 1rem;
             margin-top: 0.8rem;
-            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.62);
+            text-shadow: none;
         }
 
         .section-title {
@@ -553,9 +564,9 @@ def apply_custom_css() -> None:
             gap: 0.35rem;
             margin: -0.2rem 0 1.0rem 0;
             padding: 0.38rem 0.72rem;
-            border: 1px solid rgba(139, 92, 246, 0.36);
+            border: 1px solid rgba(15, 118, 110, 0.20);
             border-radius: 999px;
-            background: rgba(18, 21, 43, 0.62);
+            background: rgba(255, 255, 255, 0.82);
             color: var(--text-soft);
             font-size: 0.80rem;
             font-weight: 650;
@@ -570,13 +581,13 @@ def apply_custom_css() -> None:
 
         div[data-testid="stMetric"] {
             background:
-                linear-gradient(135deg, rgba(18, 21, 43, 0.86), rgba(8, 10, 28, 0.76)) !important;
-            border: 1px solid rgba(139, 92, 246, 0.38) !important;
+                linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(240, 247, 246, 0.86)) !important;
+            border: 1px solid rgba(15, 118, 110, 0.20) !important;
             border-radius: 18px !important;
             padding: 0.85rem 1rem !important;
             box-shadow:
-                0 14px 34px rgba(0, 0, 0, 0.26),
-                inset 0 1px 0 rgba(167, 139, 250, 0.16) !important;
+                0 12px 28px rgba(15, 23, 42, 0.08),
+                inset 0 1px 0 rgba(255, 255, 255, 0.86) !important;
         }
 
         div[data-testid="stMetricLabel"] p {
@@ -590,10 +601,10 @@ def apply_custom_css() -> None:
         }
 
         div[data-testid="stDataFrame"] {
-            border: 1px solid rgba(139, 92, 246, 0.32);
+            border: 1px solid rgba(15, 118, 110, 0.18);
             border-radius: 18px;
             overflow: hidden;
-            box-shadow: 0 14px 36px rgba(0, 0, 0, 0.30);
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.10);
         }
 
         button[data-baseweb="tab"] {
@@ -612,24 +623,24 @@ def apply_custom_css() -> None:
         .stDownloadButton button,
         .stButton button {
             border-radius: 14px !important;
-            border: 1px solid rgba(34, 211, 238, 0.48) !important;
+            border: 1px solid rgba(15, 118, 110, 0.45) !important;
             background: linear-gradient(135deg, var(--primary), var(--secondary)) !important;
             color: var(--text) !important;
             font-weight: 850 !important;
-            box-shadow: 0 12px 28px rgba(139, 92, 246, 0.20) !important;
+            box-shadow: 0 10px 24px rgba(15, 118, 110, 0.18) !important;
         }
 
         .stDownloadButton button:hover,
         .stButton button:hover {
-            border-color: rgba(167, 139, 250, 0.74) !important;
+            border-color: rgba(20, 184, 166, 0.70) !important;
             filter: brightness(1.06);
         }
 
         div[data-testid="stAlert"],
         div[data-testid="stAlert"] > div,
         div[data-testid="stAlert"] [role="alert"] {
-            background: rgba(18, 21, 43, 0.72) !important;
-            border: 1px solid rgba(34, 211, 238, 0.22) !important;
+            background: rgba(255, 255, 255, 0.90) !important;
+            border: 1px solid rgba(15, 118, 110, 0.18) !important;
             color: var(--text) !important;
             border-radius: 14px !important;
             box-shadow: none !important;
@@ -638,7 +649,7 @@ def apply_custom_css() -> None:
         div[data-testid="stSlider"] [role="slider"] {
             background-color: var(--secondary) !important;
             border-color: var(--secondary) !important;
-            box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.30) !important;
+            box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.24) !important;
         }
 
         div[data-testid="stSlider"] {
