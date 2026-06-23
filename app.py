@@ -1051,6 +1051,10 @@ def load_source_snapshot(
         df = pd.read_parquet(snapshot_file)
         if not isinstance(df, pd.DataFrame):
             return None
+        # Reject broken placeholder snapshots that can be created after an interrupted warmup.
+        # If API metadata says rows exist, a one-column NoData parquet is not a usable source snapshot.
+        if list(df.columns) == ["NoData"] and int(metadata.get("rows", 0) or 0) > 0:
+            return None
         metadata = metadata.copy()
         metadata["loaded_from_snapshot"] = True
         metadata.setdefault("snapshot_saved_at_utc", payload.get("saved_at_utc", "-"))
@@ -1166,6 +1170,14 @@ def load_or_fetch_source(
 def render_wide_source_tab(source_label: str, df: pd.DataFrame, metadata: dict[str, Any], source_key: str, selected_vessels: list[str], selected_start: date, selected_end: date) -> pd.DataFrame:
     st.markdown(f'<div class="section-title">{escape(source_label)} Dataset</div>', unsafe_allow_html=True)
     render_api_load_caption(metadata)
+    if list(df.columns) == ["NoData"] and int(metadata.get("rows", 0) or 0) > 0:
+        st.error(
+            f"{source_label} snapshot metadata shows {int(metadata.get('rows', 0)):,} API rows, "
+            "but the stored parquet contains only a placeholder column. "
+            f"Run the {source_key} warmup again with the latest app version."
+        )
+        return pd.DataFrame()
+
     filtered_df = filter_wide_source_data(df, source_key, selected_vessels, selected_start, selected_end)
     cols = st.columns(4)
     cols[0].metric("Rows", f"{len(filtered_df):,}")
@@ -1919,6 +1931,7 @@ def selected_vessel_controls() -> tuple[str, list[str]]:
 
     if selected_group == "Single vessel":
         vessel = st.sidebar.selectbox("Vessel to include", options=VESSEL_OPTIONS, key="atlas_single_vessel")
+        st.session_state["atlas_last_fleet_group"] = selected_group
         return selected_group, [vessel]
 
     if selected_group == "All fleets":
@@ -1927,12 +1940,22 @@ def selected_vessel_controls() -> tuple[str, list[str]]:
         group_vessels = VESSEL_GROUPS[selected_group]
 
     vessel_key = "atlas_selected_vessels"
+    last_group_key = "atlas_last_fleet_group"
+    previous_group = st.session_state.get(last_group_key)
+
+    # Streamlit keeps multiselect state after the first render, so changing from
+    # Fleet 1 to All fleets could otherwise keep only the old Fleet 1 vessels.
+    # Reset to the full new group whenever the fleet-group selector changes.
+    if previous_group != selected_group:
+        st.session_state[vessel_key] = list(group_vessels)
+        st.session_state[last_group_key] = selected_group
+
     previous_vessels = st.session_state.get(vessel_key, group_vessels)
     if not isinstance(previous_vessels, list):
         previous_vessels = group_vessels
     valid_default_vessels = [vessel for vessel in previous_vessels if vessel in group_vessels]
     if not valid_default_vessels:
-        valid_default_vessels = group_vessels
+        valid_default_vessels = list(group_vessels)
     if valid_default_vessels != previous_vessels:
         st.session_state[vessel_key] = valid_default_vessels
 
@@ -2298,20 +2321,24 @@ def fetch_wide_source_to_snapshot(
 
     if row_count == 0:
         # Some wide endpoints can legally return no rows for the selected API window.
-        # Always materialize a tiny, valid parquet snapshot so the warmup finishes
-        # cleanly instead of failing at the final replace step.
+        # In that case, create an empty snapshot with discovered columns if possible.
         empty_columns = all_columns if all_columns else ["NoData"]
         empty_df = normalize_snapshot_values(pd.DataFrame(columns=empty_columns))
         empty_df.to_parquet(tmp_file, index=False, compression="zstd")
         del empty_df
 
     if not tmp_file.exists():
-        # Last-resort guard for Streamlit Cloud / pyarrow edge cases.
-        fallback_df = pd.DataFrame({"NoData": pd.Series(dtype="string")})
-        fallback_df.to_parquet(tmp_file, index=False, compression="zstd")
-        del fallback_df
+        raise FileNotFoundError(f"{config['label']} snapshot temporary file was not created: {tmp_file}")
 
-    target_file.parent.mkdir(parents=True, exist_ok=True)
+    # Validate before replacing the previous good snapshot. Do not accept a placeholder
+    # NoData file when API rows were written.
+    try:
+        parquet_columns = pq.ParquetFile(tmp_file).schema.names
+    except Exception as exc:
+        raise RuntimeError(f"{config['label']} snapshot validation failed before save: {exc}") from exc
+    if row_count > 0 and parquet_columns == ["NoData"]:
+        raise RuntimeError(f"{config['label']} snapshot validation failed: placeholder NoData file for {row_count:,} rows.")
+
     if target_file.exists():
         target_file.unlink()
     os.replace(str(tmp_file), str(target_file))
