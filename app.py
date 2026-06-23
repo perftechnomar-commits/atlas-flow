@@ -1066,6 +1066,310 @@ def apply_custom_css() -> None:
             color: #FFFFFF !important;
             -webkit-text-fill-color: #FFFFFF !important;
         }
+
+
+        /* AtlasFlow SaaS v2 - closer to the approved mockup */
+        :root {
+            --bg: #F7FBFA;
+            --panel: #FFFFFF;
+            --teal-950: #042F2E;
+            --teal-900: #064E4B;
+            --teal-800: #075E5A;
+            --teal-700: #007C77;
+            --teal-600: #0D9488;
+            --teal-500: #14B8A6;
+            --ink: #0A2239;
+            --muted: #475569;
+            --line: rgba(7, 94, 90, 0.16);
+        }
+
+        html, body, .stApp {
+            font-family: "Aptos", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
+        }
+
+        .stApp {
+            background:
+                radial-gradient(circle at top right, rgba(20,184,166,0.13), transparent 42rem),
+                radial-gradient(circle at 23rem 12rem, rgba(7,94,90,0.07), transparent 28rem),
+                linear-gradient(180deg, #FFFFFF 0%, #F8FCFB 42%, #EEF8F6 100%) !important;
+            color: var(--ink) !important;
+        }
+
+        header[data-testid="stHeader"] {
+            background: rgba(255,255,255,0.92) !important;
+            border-bottom: 1px solid rgba(15, 23, 42, 0.08) !important;
+            box-shadow: 0 1px 16px rgba(15, 23, 42, 0.05) !important;
+            backdrop-filter: blur(12px) !important;
+        }
+
+        .block-container {
+            max-width: 1410px !important;
+            padding-top: 3.2rem !important;
+            padding-left: 3.3rem !important;
+            padding-right: 3.3rem !important;
+        }
+
+        section[data-testid="stSidebar"] {
+            width: 310px !important;
+            background:
+                radial-gradient(circle at top left, rgba(20,184,166,0.24), transparent 18rem),
+                linear-gradient(180deg, var(--teal-800) 0%, var(--teal-950) 100%) !important;
+            box-shadow: 16px 0 34px rgba(2, 44, 42, 0.16) !important;
+            border-right: 1px solid rgba(255,255,255,0.18) !important;
+        }
+
+        section[data-testid="stSidebar"] > div {
+            padding-top: 2.15rem !important;
+            padding-left: 1.1rem !important;
+            padding-right: 1.1rem !important;
+        }
+
+        /* Sidebar text: force high contrast on the dark teal panel */
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] *,
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] label *,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] *,
+        section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] label p,
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3 {
+            font-weight: 850 !important;
+            letter-spacing: -0.01em !important;
+        }
+
+        section[data-testid="stSidebar"] .stCaptionContainer,
+        section[data-testid="stSidebar"] small,
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
+            color: #D7FFFA !important;
+            -webkit-text-fill-color: #D7FFFA !important;
+            font-weight: 650 !important;
+        }
+
+        /* White controls inside sidebar */
+        section[data-testid="stSidebar"] div[data-baseweb="select"] > div,
+        section[data-testid="stSidebar"] div[data-baseweb="input"],
+        section[data-testid="stSidebar"] [data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
+        section[data-testid="stSidebar"] [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            background: #FFFFFF !important;
+            border: 1px solid rgba(255,255,255,0.70) !important;
+            border-radius: 13px !important;
+            box-shadow: 0 9px 22px rgba(0, 0, 0, 0.13) !important;
+            min-height: 43px !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-baseweb="select"] > div *,
+        section[data-testid="stSidebar"] div[data-baseweb="input"] *,
+        section[data-testid="stSidebar"] input {
+            color: var(--ink) !important;
+            -webkit-text-fill-color: var(--ink) !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-baseweb="select"] svg,
+        section[data-testid="stSidebar"] div[data-baseweb="input"] svg {
+            color: #334155 !important;
+            fill: #334155 !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="tag"] {
+            background: #DDF7F2 !important;
+            border: 1px solid rgba(7, 94, 90, 0.22) !important;
+            border-radius: 999px !important;
+            box-shadow: none !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="tag"] *,
+        section[data-testid="stSidebar"] [data-baseweb="tag"] span,
+        section[data-testid="stSidebar"] [data-baseweb="tag"] svg {
+            color: #12313E !important;
+            -webkit-text-fill-color: #12313E !important;
+            fill: #12313E !important;
+            font-weight: 650 !important;
+        }
+
+        .stButton button,
+        .stDownloadButton button {
+            border-radius: 13px !important;
+            border: 1px solid rgba(0,124,119,0.28) !important;
+            background: linear-gradient(135deg, #007C77, #0BBDB6) !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font-weight: 850 !important;
+            box-shadow: 0 10px 22px rgba(0,124,119,0.20) !important;
+        }
+        .stButton button *, .stDownloadButton button * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        .dashboard-hero {
+            padding: 2.05rem 2.15rem !important;
+            min-height: 185px !important;
+            border-radius: 22px !important;
+            border: 1px solid rgba(7,94,90,0.15) !important;
+            background:
+                linear-gradient(135deg, rgba(255,255,255,0.99), rgba(248,252,251,0.95)) !important;
+            box-shadow:
+                0 18px 48px rgba(15, 23, 42, 0.09),
+                inset 0 1px 0 rgba(255,255,255,0.94) !important;
+            margin-bottom: 1.05rem !important;
+        }
+
+        .eyebrow {
+            color: #007C77 !important;
+            -webkit-text-fill-color: #007C77 !important;
+            font-weight: 900 !important;
+            letter-spacing: 0.22em !important;
+            font-size: 0.78rem !important;
+        }
+
+        .dashboard-title {
+            color: var(--ink) !important;
+            -webkit-text-fill-color: var(--ink) !important;
+            font-family: "Aptos", "Segoe UI", system-ui, sans-serif !important;
+            font-size: clamp(2.45rem, 3.7vw, 3.7rem) !important;
+            font-weight: 900 !important;
+            letter-spacing: -0.025em !important;
+            line-height: 1.05 !important;
+            margin-top: 0.55rem !important;
+            text-shadow: none !important;
+        }
+
+        .dashboard-subtitle {
+            color: #334155 !important;
+            -webkit-text-fill-color: #334155 !important;
+            font-size: 1.02rem !important;
+            font-weight: 550 !important;
+            margin-top: 1.15rem !important;
+        }
+
+        .api-load-caption,
+        .atlas-pill {
+            background: rgba(255,255,255,0.92) !important;
+            border: 1px solid rgba(7,94,90,0.15) !important;
+            box-shadow: 0 8px 20px rgba(15,23,42,0.06) !important;
+            color: #334155 !important;
+            -webkit-text-fill-color: #334155 !important;
+            font-weight: 700 !important;
+        }
+        .api-load-caption span, .atlas-pill span {
+            color: var(--ink) !important;
+            -webkit-text-fill-color: var(--ink) !important;
+        }
+
+        button[data-baseweb="tab"] {
+            color: #475569 !important;
+            -webkit-text-fill-color: #475569 !important;
+            font-weight: 750 !important;
+        }
+        button[data-baseweb="tab"] * {
+            color: inherit !important;
+            -webkit-text-fill-color: inherit !important;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            color: #007C77 !important;
+            -webkit-text-fill-color: #007C77 !important;
+        }
+        div[data-baseweb="tab-highlight"] {
+            background-color: #00A6A0 !important;
+            height: 3px !important;
+        }
+
+        .section-title,
+        .stApp h1,
+        .stApp h2,
+        .stApp h3,
+        .stApp h4,
+        .stApp strong {
+            color: var(--ink) !important;
+            -webkit-text-fill-color: var(--ink) !important;
+        }
+        .stApp [data-testid="stMarkdownContainer"] p,
+        .stApp [data-testid="stCaptionContainer"] p {
+            color: #475569 !important;
+            -webkit-text-fill-color: #475569 !important;
+        }
+
+        [data-testid="stRadio"] label,
+        [data-testid="stRadio"] label *,
+        [data-testid="stRadio"] p {
+            color: var(--ink) !important;
+            -webkit-text-fill-color: var(--ink) !important;
+        }
+        [data-testid="stRadio"] [role="radiogroup"] label {
+            background: #FFFFFF !important;
+            border: 1px solid rgba(7,94,90,0.13) !important;
+            border-radius: 999px !important;
+            padding: 0.30rem 0.70rem !important;
+            box-shadow: 0 4px 12px rgba(15,23,42,0.04) !important;
+        }
+
+        div[data-testid="stMetric"] {
+            background: #FFFFFF !important;
+            border: 1px solid rgba(7,94,90,0.13) !important;
+            border-radius: 18px !important;
+            box-shadow: 0 12px 28px rgba(15,23,42,0.075) !important;
+            padding: 1.0rem 1.15rem !important;
+            min-height: 98px !important;
+        }
+        div[data-testid="stMetricLabel"] p,
+        div[data-testid="stMetricLabel"] span {
+            color: #334155 !important;
+            -webkit-text-fill-color: #334155 !important;
+            font-weight: 700 !important;
+        }
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricValue"] * {
+            color: var(--ink) !important;
+            -webkit-text-fill-color: var(--ink) !important;
+            font-weight: 950 !important;
+        }
+
+        /* DataFrame frame: if Streamlit grid internals remain dark, this still gives the SaaS shell around it */
+        div[data-testid="stDataFrame"] {
+            background: #FFFFFF !important;
+            border: 1px solid rgba(7,94,90,0.16) !important;
+            border-radius: 16px !important;
+            box-shadow: 0 14px 34px rgba(15,23,42,0.085) !important;
+        }
+        div[data-testid="stDataFrame"] * {
+            font-family: "Aptos", "Segoe UI", system-ui, sans-serif !important;
+        }
+
+        /* Expander in sidebar */
+        section[data-testid="stSidebar"] [data-testid="stExpander"] {
+            background: rgba(255,255,255,0.08) !important;
+            border: 1px solid rgba(255,255,255,0.24) !important;
+            border-radius: 12px !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stExpander"] summary,
+        section[data-testid="stSidebar"] [data-testid="stExpander"] summary * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font-weight: 850 !important;
+        }
+
+        /* Dropdown menus */
+        [data-baseweb="popover"],
+        [data-baseweb="menu"],
+        [role="listbox"] {
+            background: #FFFFFF !important;
+            color: var(--ink) !important;
+        }
+        [role="option"], [role="option"] *, [data-baseweb="menu"] * {
+            color: var(--ink) !important;
+            -webkit-text-fill-color: var(--ink) !important;
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
