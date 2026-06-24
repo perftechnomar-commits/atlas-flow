@@ -1374,6 +1374,602 @@ def apply_custom_css() -> None:
         """,
         unsafe_allow_html=True,
     )
+    st.markdown(
+        """
+        <style>
+        :root {
+            --atlas-topbar-h: 67px;
+            --atlas-sidebar-w: 324px;
+            --atlas-ink: #0B1F33;
+            --atlas-muted: #24364F;
+            --atlas-soft: #64748B;
+            --atlas-teal: #006B68;
+            --atlas-teal-2: #008B86;
+            --atlas-line: #D9E6E5;
+            --atlas-panel: #FFFFFF;
+            --atlas-bg: #FAFCFC;
+            --atlas-chip: #DDF4F2;
+        }
+
+        html,
+        body,
+        .stApp {
+            background: var(--atlas-bg) !important;
+            color: var(--atlas-ink) !important;
+            font-family: "Segoe UI", "Inter", "Aptos", Arial, sans-serif !important;
+        }
+
+        .stApp {
+            background:
+                linear-gradient(90deg, rgba(0, 107, 104, 0.035), transparent 24rem),
+                linear-gradient(180deg, #FFFFFF 0%, #FBFDFD 46%, #F4FAF9 100%) !important;
+        }
+
+        header[data-testid="stHeader"] {
+            left: 0 !important;
+            right: 0 !important;
+            width: 100vw !important;
+            height: var(--atlas-topbar-h) !important;
+            background: rgba(255, 255, 255, 0.98) !important;
+            border-bottom: 1px solid rgba(15, 23, 42, 0.10) !important;
+            box-shadow: 0 1px 12px rgba(15, 23, 42, 0.04) !important;
+            z-index: 999990 !important;
+        }
+
+        header[data-testid="stHeader"] > div {
+            height: var(--atlas-topbar-h) !important;
+            background: transparent !important;
+        }
+
+        div[data-testid="stToolbar"] {
+            top: 0.55rem !important;
+            right: 1.55rem !important;
+            z-index: 999995 !important;
+        }
+
+        div[data-testid="stDecoration"] {
+            display: none !important;
+        }
+
+        .atlas-topbar-brand {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: var(--atlas-topbar-h);
+            display: flex;
+            align-items: center;
+            gap: 0.95rem;
+            padding-left: 1.35rem;
+            z-index: 999996;
+            pointer-events: none;
+        }
+
+        .atlas-menu-lines {
+            width: 24px;
+            height: 24px;
+            position: relative;
+            flex: 0 0 24px;
+        }
+
+        .atlas-menu-lines::before,
+        .atlas-menu-lines::after,
+        .atlas-menu-lines span {
+            content: "";
+            position: absolute;
+            left: 2px;
+            width: 18px;
+            height: 2px;
+            border-radius: 999px;
+            background: var(--atlas-teal);
+        }
+
+        .atlas-menu-lines::before { top: 6px; }
+        .atlas-menu-lines span { top: 11px; }
+        .atlas-menu-lines::after { top: 16px; }
+
+        .atlas-logo-mark {
+            width: 34px;
+            height: 34px;
+            position: relative;
+            flex: 0 0 34px;
+        }
+
+        .atlas-logo-mark::before,
+        .atlas-logo-mark::after {
+            content: "";
+            position: absolute;
+            border-radius: 18px 18px 18px 6px;
+            transform: rotate(34deg);
+            box-shadow: 0 4px 12px rgba(0, 107, 104, 0.18);
+        }
+
+        .atlas-logo-mark::before {
+            width: 20px;
+            height: 31px;
+            left: 4px;
+            top: 2px;
+            background: linear-gradient(145deg, #013F43 0%, #008C86 62%, #19BFB5 100%);
+        }
+
+        .atlas-logo-mark::after {
+            width: 18px;
+            height: 24px;
+            left: 15px;
+            top: 10px;
+            background: linear-gradient(145deg, #0FB5AD 0%, #006B68 100%);
+            opacity: 0.94;
+        }
+
+        .atlas-brand-word {
+            color: #07515A;
+            font-size: 1.85rem;
+            font-weight: 400;
+            line-height: 1;
+            letter-spacing: 0;
+        }
+
+        @media (min-width: 769px) {
+            section[data-testid="stSidebar"] {
+                width: var(--atlas-sidebar-w) !important;
+                min-width: var(--atlas-sidebar-w) !important;
+                top: var(--atlas-topbar-h) !important;
+                height: calc(100vh - var(--atlas-topbar-h)) !important;
+                background:
+                    radial-gradient(circle at 18px 8px, rgba(35, 209, 199, 0.18), transparent 16rem),
+                    linear-gradient(180deg, #006A66 0%, #004743 46%, #003C39 100%) !important;
+                border-right: 1px solid rgba(255, 255, 255, 0.16) !important;
+                box-shadow: none !important;
+            }
+
+            section[data-testid="stSidebar"] > div {
+                padding: 1.25rem 1.25rem 6rem 1.25rem !important;
+                height: calc(100vh - var(--atlas-topbar-h)) !important;
+            }
+
+            .block-container {
+                max-width: none !important;
+                padding: 3.55rem 1.9rem 3rem 2.35rem !important;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .atlas-brand-word {
+                font-size: 1.35rem;
+            }
+
+            .atlas-logo-mark {
+                width: 28px;
+                height: 28px;
+            }
+
+            .block-container {
+                padding: 5.2rem 1rem 2rem 1rem !important;
+            }
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+            gap: 0.72rem !important;
+        }
+
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] label *,
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] *,
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font-weight: 760 !important;
+            letter-spacing: 0 !important;
+        }
+
+        section[data-testid="stSidebar"] h3 {
+            font-size: 1.05rem !important;
+            margin-top: 0.25rem !important;
+            margin-bottom: 0.1rem !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] *,
+        section[data-testid="stSidebar"] small {
+            color: #D7FFFA !important;
+            -webkit-text-fill-color: #D7FFFA !important;
+            font-weight: 650 !important;
+        }
+
+        section[data-testid="stSidebar"] .stButton button {
+            min-height: 39px !important;
+            padding: 0.35rem 1.05rem !important;
+            border-radius: 8px !important;
+            background: linear-gradient(135deg, #078A86, #12B7AF) !important;
+            border: 1px solid rgba(255, 255, 255, 0.24) !important;
+            box-shadow: none !important;
+            font-weight: 800 !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-baseweb="select"] > div,
+        section[data-testid="stSidebar"] div[data-baseweb="input"],
+        section[data-testid="stSidebar"] [data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
+        section[data-testid="stSidebar"] [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            min-height: 44px !important;
+            border-radius: 9px !important;
+            border: 1px solid rgba(8, 72, 70, 0.12) !important;
+            background: #FFFFFF !important;
+            box-shadow: none !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-baseweb="select"] > div *,
+        section[data-testid="stSidebar"] div[data-baseweb="input"] *,
+        section[data-testid="stSidebar"] input {
+            color: var(--atlas-ink) !important;
+            -webkit-text-fill-color: var(--atlas-ink) !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="tag"] {
+            background: var(--atlas-chip) !important;
+            border: 1px solid rgba(0, 107, 104, 0.22) !important;
+            border-radius: 999px !important;
+            box-shadow: none !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="tag"] *,
+        section[data-testid="stSidebar"] [data-baseweb="tag"] span,
+        section[data-testid="stSidebar"] [data-baseweb="tag"] svg {
+            color: #12313E !important;
+            -webkit-text-fill-color: #12313E !important;
+            fill: #12313E !important;
+            font-weight: 650 !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stExpander"] {
+            border-radius: 8px !important;
+            border: 1px solid rgba(255, 255, 255, 0.72) !important;
+            background: rgba(255, 255, 255, 0.07) !important;
+            box-shadow: none !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stExpander"] summary,
+        section[data-testid="stSidebar"] [data-testid="stExpander"] summary * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font-weight: 800 !important;
+        }
+
+        .dashboard-hero {
+            box-sizing: border-box !important;
+            min-height: 164px !important;
+            margin: 0 0 0.82rem 0 !important;
+            padding: 1.45rem 1.65rem 0.1rem 1.65rem !important;
+            border-radius: 13px !important;
+            border: 1px solid rgba(15, 23, 42, 0.11) !important;
+            background: rgba(255, 255, 255, 0.93) !important;
+            box-shadow: 0 2px 12px rgba(15, 23, 42, 0.12) !important;
+            backdrop-filter: blur(4px) !important;
+        }
+
+        .eyebrow {
+            color: var(--atlas-teal) !important;
+            -webkit-text-fill-color: var(--atlas-teal) !important;
+            font-size: 0.74rem !important;
+            font-weight: 850 !important;
+            letter-spacing: 0.22em !important;
+            margin-bottom: 0.95rem !important;
+        }
+
+        .dashboard-title {
+            color: var(--atlas-ink) !important;
+            -webkit-text-fill-color: var(--atlas-ink) !important;
+            font-family: "Segoe UI Light", "Aptos Display", "Segoe UI", sans-serif !important;
+            font-size: clamp(3.15rem, 4vw, 4.05rem) !important;
+            font-weight: 300 !important;
+            letter-spacing: 0 !important;
+            line-height: 1.02 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        .dashboard-subtitle {
+            color: var(--atlas-muted) !important;
+            -webkit-text-fill-color: var(--atlas-muted) !important;
+            font-size: 1.0rem !important;
+            font-weight: 500 !important;
+            margin-top: 0.8rem !important;
+        }
+
+        .api-load-caption,
+        .atlas-pill {
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 0.52rem !important;
+            min-height: 37px !important;
+            margin: 0 0 1.15rem 0 !important;
+            padding: 0.4rem 0.9rem !important;
+            border-radius: 999px !important;
+            border: 1px solid rgba(15, 23, 42, 0.12) !important;
+            background: rgba(255, 255, 255, 0.96) !important;
+            box-shadow: 0 1px 8px rgba(15, 23, 42, 0.06) !important;
+            color: var(--atlas-muted) !important;
+            -webkit-text-fill-color: var(--atlas-muted) !important;
+            font-size: 0.82rem !important;
+            font-weight: 700 !important;
+        }
+
+        .api-load-caption strong,
+        .api-load-caption span,
+        .atlas-pill span {
+            color: var(--atlas-ink) !important;
+            -webkit-text-fill-color: var(--atlas-ink) !important;
+            font-weight: 800 !important;
+        }
+
+        .api-load-clock {
+            width: 17px;
+            height: 17px;
+            color: var(--atlas-teal);
+            -webkit-text-fill-color: var(--atlas-teal);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .api-load-clock svg {
+            width: 17px;
+            height: 17px;
+            stroke: currentColor;
+            stroke-width: 2.1;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+            gap: 1.35rem !important;
+            border-bottom: 1px solid var(--atlas-line) !important;
+        }
+
+        button[data-baseweb="tab"] {
+            height: 42px !important;
+            padding: 0 0.45rem !important;
+            color: #334155 !important;
+            -webkit-text-fill-color: #334155 !important;
+            font-size: 0.94rem !important;
+            font-weight: 500 !important;
+            letter-spacing: 0 !important;
+        }
+
+        button[data-baseweb="tab"][aria-selected="true"] {
+            color: var(--atlas-teal) !important;
+            -webkit-text-fill-color: var(--atlas-teal) !important;
+            font-weight: 700 !important;
+        }
+
+        div[data-baseweb="tab-highlight"] {
+            background-color: var(--atlas-teal) !important;
+            height: 2px !important;
+        }
+
+        .section-title {
+            color: var(--atlas-ink) !important;
+            -webkit-text-fill-color: var(--atlas-ink) !important;
+            font-size: 1.58rem !important;
+            line-height: 1.22 !important;
+            font-weight: 400 !important;
+            letter-spacing: 0 !important;
+            margin: 0.55rem 0 0.45rem 0 !important;
+        }
+
+        .stApp [data-testid="stMarkdownContainer"] p,
+        .stApp [data-testid="stCaptionContainer"] p {
+            color: var(--atlas-muted) !important;
+            -webkit-text-fill-color: var(--atlas-muted) !important;
+        }
+
+        [data-testid="stRadio"] > label,
+        [data-testid="stRadio"] > label * {
+            color: var(--atlas-ink) !important;
+            -webkit-text-fill-color: var(--atlas-ink) !important;
+            font-weight: 650 !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] {
+            gap: 1.9rem !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label {
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label *,
+        [data-testid="stRadio"] [role="radiogroup"] p {
+            color: var(--atlas-ink) !important;
+            -webkit-text-fill-color: var(--atlas-ink) !important;
+            font-weight: 500 !important;
+        }
+
+        .atlas-metric-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 1.35rem;
+            margin: 0 0 0.4rem 0;
+        }
+
+        .atlas-metric-card {
+            display: grid;
+            grid-template-columns: 58px minmax(0, 1fr);
+            align-items: center;
+            gap: 1.0rem;
+            min-height: 95px;
+            padding: 1.0rem 1.05rem;
+            background: #FFFFFF;
+            border: 1px solid rgba(15, 23, 42, 0.10);
+            border-radius: 9px;
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+        }
+
+        .atlas-metric-icon {
+            width: 55px;
+            height: 55px;
+            border-radius: 8px;
+            background: #E5F6F3;
+            color: var(--atlas-teal);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .atlas-metric-icon svg {
+            width: 32px;
+            height: 32px;
+            stroke: currentColor;
+            stroke-width: 2.2;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .atlas-metric-label {
+            color: var(--atlas-muted);
+            font-size: 0.88rem;
+            line-height: 1.2;
+            font-weight: 500;
+            margin-bottom: 0.35rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .atlas-metric-value {
+            color: #0D1830;
+            font-size: 1.85rem;
+            line-height: 1;
+            font-weight: 400;
+            letter-spacing: 0;
+        }
+
+        .atlas-table-frame {
+            margin-top: 0.4rem;
+            border: 1px solid rgba(15, 23, 42, 0.10);
+            border-radius: 7px;
+            background: #FFFFFF;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+        }
+
+        .atlas-table-scroll {
+            width: 100%;
+            overflow: auto;
+            max-height: 560px;
+        }
+
+        .atlas-preview-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-size: 0.88rem;
+            color: var(--atlas-ink);
+        }
+
+        .atlas-preview-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            text-align: left;
+            padding: 0.62rem 1.0rem;
+            color: #FFFFFF;
+            background: linear-gradient(180deg, #006F6A 0%, #005D59 100%);
+            border-right: 1px solid rgba(255, 255, 255, 0.20);
+            font-weight: 750;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .atlas-preview-table tbody td {
+            padding: 0.48rem 1.0rem;
+            border-top: 1px solid #E7EDEF;
+            border-right: 1px solid #E7EDEF;
+            background: #FFFFFF;
+            color: #12233D;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .atlas-preview-table tbody tr:nth-child(even) td {
+            background: #FCFDFD;
+        }
+
+        .atlas-preview-table th:last-child,
+        .atlas-preview-table td:last-child {
+            border-right: 0;
+        }
+
+        .atlas-table-empty {
+            margin-top: 1rem;
+            padding: 1.1rem 1.2rem;
+            border: 1px solid rgba(15, 23, 42, 0.10);
+            border-radius: 9px;
+            background: #FFFFFF;
+            color: var(--atlas-muted);
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+        }
+
+        div[data-testid="stMetric"] {
+            background: #FFFFFF !important;
+            border: 1px solid rgba(15, 23, 42, 0.10) !important;
+            border-radius: 9px !important;
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08) !important;
+        }
+
+        div[data-testid="stDataFrame"] {
+            border: 1px solid rgba(15, 23, 42, 0.10) !important;
+            border-radius: 7px !important;
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08) !important;
+            background: #FFFFFF !important;
+        }
+
+        .stDownloadButton button,
+        .stButton button {
+            border-radius: 8px !important;
+            background: linear-gradient(135deg, #006F6A, #0AAEA6) !important;
+            border: 1px solid rgba(0, 107, 104, 0.32) !important;
+            box-shadow: none !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font-weight: 800 !important;
+        }
+
+        @media (max-width: 1100px) {
+            .atlas-metric-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 640px) {
+            .atlas-metric-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .dashboard-title {
+                font-size: 2.55rem !important;
+            }
+
+            .dashboard-hero {
+                min-height: 150px !important;
+            }
+        }
+        </style>
+        <div class="atlas-topbar-brand" aria-hidden="true">
+            <div class="atlas-menu-lines"><span></span></div>
+            <div class="atlas-logo-mark"></div>
+            <div class="atlas-brand-word">AtlasFlow</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_header(selected_group: str, selected_vessels: list[str], selected_variables: list[str]) -> None:
@@ -1400,7 +1996,13 @@ def render_api_load_caption(metadata: dict[str, Any] | None) -> None:
     st.markdown(
         f"""
         <div class="api-load-caption">
-            Last API load: <span>{escape(last_load_display)} LT</span>
+            <span class="api-load-clock" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="9"></circle>
+                    <path d="M12 7v5l3 2"></path>
+                </svg>
+            </span>
+            <strong>Last API load:</strong> <span>{escape(last_load_display)} LT</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2156,23 +2758,28 @@ def add_performance_calculations(pivot_df: pd.DataFrame, source_table: pd.DataFr
                 how="left",
             )
 
-    lap_time = pd.to_numeric(df.get("LapTime"), errors="coerce")
-    engine_distance = pd.to_numeric(df.get("Engine Distance [nm]"), errors="coerce")
-    distance_over_ground = pd.to_numeric(df.get("Distance Over Ground [nm]"), errors="coerce")
-    power = pd.to_numeric(df.get("Power from Torque Meter [kW]"), errors="coerce")
+    def numeric_column(column: str) -> pd.Series:
+        if column not in df.columns:
+            return pd.Series(pd.NA, index=df.index, dtype="Float64")
+        return pd.to_numeric(df[column], errors="coerce")
+
+    lap_time = numeric_column("LapTime")
+    engine_distance = numeric_column("Engine Distance [nm]")
+    distance_over_ground = numeric_column("Distance Over Ground [nm]")
+    power = numeric_column("Power from Torque Meter [kW]")
 
     df["Calculated Slip"] = (1 - safe_divide(distance_over_ground, engine_distance)).round(3)
 
     me_sum = sum_numeric_columns(df, ME_FUEL_COLUMNS)
-    official_me_total = pd.to_numeric(df.get("Main Engine Total Consumed"), errors="coerce")
+    official_me_total = numeric_column("Main Engine Total Consumed")
     df["ME Consumption Total"] = me_sum.fillna(official_me_total).round(3)
 
     dg_sum = sum_numeric_columns(df, DG_FUEL_COLUMNS)
-    official_dg_total = pd.to_numeric(df.get("Diesel Generator Total Consumed"), errors="coerce")
+    official_dg_total = numeric_column("Diesel Generator Total Consumed")
     df["DG Consumption Total"] = dg_sum.fillna(official_dg_total).round(3)
 
     aux_sum = sum_numeric_columns(df, AUXILIARY_FUEL_COLUMNS)
-    official_aux_total = pd.to_numeric(df.get("Auxiliary Engine Total Consumed"), errors="coerce")
+    official_aux_total = numeric_column("Auxiliary Engine Total Consumed")
     df["Auxiliary Engine Consumption Total"] = aux_sum.fillna(official_aux_total).round(3)
 
     df["Boiler Sum"] = sum_numeric_columns(df, BOILER_FUEL_COLUMNS).round(3)
@@ -2186,7 +2793,7 @@ def add_performance_calculations(pivot_df: pd.DataFrame, source_table: pd.DataFr
         ],
         axis=1,
     ).sum(axis=1, min_count=1)
-    official_total = pd.to_numeric(df.get("Total Fuel Consumed"), errors="coerce")
+    official_total = numeric_column("Total Fuel Consumed")
     df["Total Fuel Consumption"] = calculated_total.fillna(official_total).round(3)
 
     df["Consumption ME 24 Hours [MT]"] = safe_divide(df["ME Consumption Total"] * 24, lap_time).round(3)
@@ -2272,6 +2879,47 @@ def format_display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         if values.notna().any():
             display_df[column] = values.map(lambda value: "-" if pd.isna(value) else f"{value:,.3f}")
     return display_df.fillna("-")
+
+
+METRIC_ICON_SVGS = {
+    "table": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="1.8"></rect><path d="M3 9h18M3 15h18M9 3v18M15 3v18"></path></svg>',
+    "list": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h9"></path><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"></path></svg>',
+    "database": '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg>',
+    "nodes": '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4" r="2.5"></circle><circle cx="5" cy="19" r="2.5"></circle><circle cx="19" cy="19" r="2.5"></circle><path d="M10.8 6.2 6.2 16.8M13.2 6.2l4.6 10.6M7.5 19h9"></path></svg>',
+}
+
+
+def render_metric_cards(cards: list[tuple[str, str, str]]) -> None:
+    card_html = []
+    for label, value, icon_name in cards:
+        icon_svg = METRIC_ICON_SVGS.get(icon_name, METRIC_ICON_SVGS["table"])
+        card_html.append(
+            f'<div class="atlas-metric-card"><div class="atlas-metric-icon">{icon_svg}</div>'
+            f'<div><div class="atlas-metric-label">{escape(label)}</div>'
+            f'<div class="atlas-metric-value">{escape(value)}</div></div></div>'
+        )
+    st.markdown(f'<div class="atlas-metric-grid">{"".join(card_html)}</div>', unsafe_allow_html=True)
+
+
+def render_preview_table(df: pd.DataFrame, row_limit: int = TABLE_PREVIEW_ROW_LIMIT) -> None:
+    preview_df = format_display_dataframe(df.head(row_limit))
+    if preview_df.empty:
+        st.markdown('<div class="atlas-table-empty">No rows to display.</div>', unsafe_allow_html=True)
+        return
+
+    columns = [str(column) for column in preview_df.columns]
+    header_html = "".join(f"<th>{escape(column)}</th>" for column in columns)
+    rows_html: list[str] = []
+    for row in preview_df.itertuples(index=False, name=None):
+        cell_html = "".join(("<td>" + escape(str(value)) + "</td>") for value in row)
+        rows_html.append(f"<tr>{cell_html}</tr>")
+
+    table_html = (
+        '<div class="atlas-table-frame"><div class="atlas-table-scroll">'
+        f'<table class="atlas-preview-table"><thead><tr>{header_html}</tr></thead>'
+        f'<tbody>{"".join(rows_html)}</tbody></table></div></div>'
+    )
+    st.markdown(table_html, unsafe_allow_html=True)
 
 
 def make_unique_excel_columns(columns: list[Any]) -> list[str]:
@@ -3453,17 +4101,16 @@ def main() -> None:
             displayed_table_df = output_df.copy()
             export_sheet_name = "Clean Dataset"
 
-        metric_cols = st.columns(4)
-        metric_cols[0].metric("Displayed rows", f"{len(displayed_table_df):,}")
-        metric_cols[1].metric("Selected variables", f"{len(selected_variables):,}")
-        metric_cols[2].metric("Source long rows", f"{len(filtered_long_for_options):,}")
-        metric_cols[3].metric("Available variables", f"{len(variable_options):,}")
-
-        st.dataframe(
-            format_display_dataframe(displayed_table_df.head(TABLE_PREVIEW_ROW_LIMIT)),
-            use_container_width=True,
-            hide_index=True,
+        render_metric_cards(
+            [
+                ("Displayed rows", f"{len(displayed_table_df):,}", "table"),
+                ("Selected variables", f"{len(selected_variables):,}", "list"),
+                ("Source long rows", f"{len(filtered_long_for_options):,}", "database"),
+                ("Available variables", f"{len(variable_options):,}", "nodes"),
+            ]
         )
+
+        render_preview_table(displayed_table_df)
         if len(displayed_table_df) > TABLE_PREVIEW_ROW_LIMIT:
             st.caption(
                 f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of {len(displayed_table_df):,} rows. "
