@@ -156,6 +156,22 @@ PERFORMANCE_KPI_VALUE_ALIASES = {
     "Auxiliary Engine - ULSLFO": ["Auxiliary Engine - ULSLFO", "Aux Engine - ULSLFO", "Aux - ULSLFO"],
     "Auxiliary Engine - VLSHFO": ["Auxiliary Engine - VLSHFO", "Aux Engine - VLSHFO", "Aux - VLSHFO"],
     "Auxiliary Engine - VLSLFO": ["Auxiliary Engine - VLSLFO", "Aux Engine - VLSLFO", "Aux - VLSLFO"],
+
+    # Lub oil ROB/received and DG running hours for consumption aggregation.
+    # These are pulled from ReportData so AtlasFlow can expose oil consumption
+    # totals as selectable derived variables, not as engineered KPI metrics.
+    "MELO ROB [ltr]": ["MELO ROB [ltr]"],
+    "MELO Received [ltr]": ["MELO Received [ltr]"],
+    "Cylinder Oil 1 ROB [ltr]": ["Cylinder Oil 1 ROB [ltr]"],
+    "Cylinder Oil 1 Received [ltr]": ["Cylinder Oil 1 Received [ltr]"],
+    "Cylinder Oil 2 ROB [ltr]": ["Cylinder Oil 2 ROB [ltr]"],
+    "Cylinder Oil 2 Received [ltr]": ["Cylinder Oil 2 Received [ltr]"],
+    "GELO ROB [ltr]": ["GELO ROB [ltr]", "GELO Grade ROB [ltr]"],
+    "GELO Received [ltr]": ["GELO Received [ltr]"],
+    "DG1 Running Hours [hh:mm]": ["DG1 Running Hours [hh:mm]"],
+    "DG2 Running Hours [hh:mm]": ["DG2 Running Hours [hh:mm]"],
+    "DG3 Running Hours [hh:mm]": ["DG3 Running Hours [hh:mm]"],
+    "DG4 Running Hours [hh:mm]": ["DG4 Running Hours [hh:mm]"],
 }
 
 REPORTDATA_VALUE_WHITELIST = sorted(
@@ -281,6 +297,22 @@ DERIVED_VALUE_ALIASES = {
     "Auxiliary Engine - ULSLFO": ["Auxiliary Engine - ULSLFO", "Aux Engine - ULSLFO", "Aux - ULSLFO"],
     "Auxiliary Engine - VLSHFO": ["Auxiliary Engine - VLSHFO", "Aux Engine - VLSHFO", "Aux - VLSHFO"],
     "Auxiliary Engine - VLSLFO": ["Auxiliary Engine - VLSLFO", "Aux Engine - VLSLFO", "Aux - VLSLFO"],
+
+    # Lub oil ROB/received and DG running hours for consumption aggregation.
+    # These are pulled from ReportData so AtlasFlow can expose oil consumption
+    # totals as selectable derived variables, not as engineered KPI metrics.
+    "MELO ROB [ltr]": ["MELO ROB [ltr]"],
+    "MELO Received [ltr]": ["MELO Received [ltr]"],
+    "Cylinder Oil 1 ROB [ltr]": ["Cylinder Oil 1 ROB [ltr]"],
+    "Cylinder Oil 1 Received [ltr]": ["Cylinder Oil 1 Received [ltr]"],
+    "Cylinder Oil 2 ROB [ltr]": ["Cylinder Oil 2 ROB [ltr]"],
+    "Cylinder Oil 2 Received [ltr]": ["Cylinder Oil 2 Received [ltr]"],
+    "GELO ROB [ltr]": ["GELO ROB [ltr]", "GELO Grade ROB [ltr]"],
+    "GELO Received [ltr]": ["GELO Received [ltr]"],
+    "DG1 Running Hours [hh:mm]": ["DG1 Running Hours [hh:mm]"],
+    "DG2 Running Hours [hh:mm]": ["DG2 Running Hours [hh:mm]"],
+    "DG3 Running Hours [hh:mm]": ["DG3 Running Hours [hh:mm]"],
+    "DG4 Running Hours [hh:mm]": ["DG4 Running Hours [hh:mm]"],
 }
 
 ME_FUEL_COLUMNS = [
@@ -332,6 +364,10 @@ DERIVED_VARIABLES = [
     "Total Fuel Consumption",
     "Consumption ME 24 Hours [MT]",
     "SFOC [gr/Kwh]",
+    "MELO Consumption Total [ltr]",
+    "CYLO Consumption Total [ltr]",
+    "GELO Consumption Total [ltr]",
+    "Total DG Running Hours [hh:mm]",
 ]
 
 VESSEL_GROUPS = {
@@ -2706,6 +2742,41 @@ def calculation_alias_to_column() -> dict[str, str]:
     }
 
 
+def calculate_rob_consumption(
+    df: pd.DataFrame,
+    rob_column: str,
+    received_column: str,
+) -> pd.Series:
+    """Calculate row-level consumption from ROB movement inside the current sample.
+
+    The first report per vessel has no previous ROB inside the selected sample, so it
+    remains blank. Negative values are treated as blank because they usually indicate
+    correction/noise or a missing receipt entry rather than real consumption.
+    """
+    if rob_column not in df.columns:
+        return pd.Series(pd.NA, index=df.index, dtype="Float64")
+
+    work = df[["ShipName", "StartDateTimeGMT", "EndDateTimeGMT", rob_column]].copy()
+    if received_column in df.columns:
+        work[received_column] = pd.to_numeric(df[received_column], errors="coerce").fillna(0)
+    else:
+        work[received_column] = 0.0
+
+    work[rob_column] = pd.to_numeric(work[rob_column], errors="coerce")
+    work["_original_index"] = df.index
+    work["_sort_date"] = pd.to_datetime(work["EndDateTimeGMT"], errors="coerce", utc=True)
+    fallback_dates = pd.to_datetime(work["StartDateTimeGMT"], errors="coerce", utc=True)
+    work["_sort_date"] = work["_sort_date"].fillna(fallback_dates)
+    work = work.sort_values(["ShipName", "_sort_date", "_original_index"])
+    previous_rob = work.groupby("ShipName", dropna=False)[rob_column].shift(1)
+    consumption = previous_rob + work[received_column] - work[rob_column]
+    consumption = consumption.where(consumption >= 0)
+    consumption = consumption.where(previous_rob.notna() & work[rob_column].notna())
+    result = pd.Series(pd.NA, index=df.index, dtype="Float64")
+    result.loc[work["_original_index"]] = pd.to_numeric(consumption, errors="coerce").to_numpy()
+    return result
+
+
 def build_calculation_source_table(filtered_long_df: pd.DataFrame) -> pd.DataFrame:
     if filtered_long_df.empty:
         return pd.DataFrame(columns=PIVOT_IDENTITY_COLUMNS)
@@ -2801,6 +2872,43 @@ def add_performance_calculations(pivot_df: pd.DataFrame, source_table: pd.DataFr
     df["SFOC [gr/Kwh]"] = (
         safe_divide(df["Consumption ME 24 Hours [MT]"], power) / 0.000024
     ).round(3).fillna(0)
+
+    # Oil consumption aggregation variables. These are row-level consumption
+    # movements calculated inside the current selected sample, so Summary Analysis
+    # can later Sum them by vessel/fleet/month/report type.
+    df["MELO Consumption Total [ltr]"] = calculate_rob_consumption(
+        df,
+        "MELO ROB [ltr]",
+        "MELO Received [ltr]",
+    ).round(3)
+    cylinder_oil_1_consumption = calculate_rob_consumption(
+        df,
+        "Cylinder Oil 1 ROB [ltr]",
+        "Cylinder Oil 1 Received [ltr]",
+    )
+    cylinder_oil_2_consumption = calculate_rob_consumption(
+        df,
+        "Cylinder Oil 2 ROB [ltr]",
+        "Cylinder Oil 2 Received [ltr]",
+    )
+    df["CYLO Consumption Total [ltr]"] = pd.concat(
+        [cylinder_oil_1_consumption, cylinder_oil_2_consumption],
+        axis=1,
+    ).sum(axis=1, min_count=1).round(3)
+    df["GELO Consumption Total [ltr]"] = calculate_rob_consumption(
+        df,
+        "GELO ROB [ltr]",
+        "GELO Received [ltr]",
+    ).round(3)
+    df["Total DG Running Hours [hh:mm]"] = sum_numeric_columns(
+        df,
+        [
+            "DG1 Running Hours [hh:mm]",
+            "DG2 Running Hours [hh:mm]",
+            "DG3 Running Hours [hh:mm]",
+            "DG4 Running Hours [hh:mm]",
+        ],
+    ).round(3)
 
     return df
 
@@ -3201,6 +3309,182 @@ def apply_column_filters(df: pd.DataFrame, specs: list[dict[str, Any]]) -> pd.Da
     return filtered
 
 
+
+# =============================================================================
+# Descriptive statistics helpers
+# =============================================================================
+
+
+def dataframe_numeric_options(df: pd.DataFrame) -> list[str]:
+    return [column for column in df.columns if pd.to_numeric(df[column], errors="coerce").notna().any()]
+
+
+def dataframe_categorical_options(df: pd.DataFrame) -> list[str]:
+    options: list[str] = []
+    for column in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[column]):
+            continue
+        numeric_values = pd.to_numeric(df[column], errors="coerce")
+        if numeric_values.notna().any():
+            continue
+        if df[column].astype("string").dropna().nunique() <= 250:
+            options.append(column)
+    return options
+
+
+def detect_analysis_datetime_column(df: pd.DataFrame) -> str | None:
+    preferred_columns = ["StartDateTimeGMT", "EndDateTimeGMT", "DateTime", "ReportDateTime", "Timestamp"]
+    for column in preferred_columns:
+        if column in df.columns and pd.to_datetime(df[column], errors="coerce", utc=True).notna().any():
+            return column
+    for column in df.columns:
+        lower = str(column).lower()
+        if ("date" in lower or "time" in lower) and pd.to_datetime(df[column], errors="coerce", utc=True).notna().any():
+            return column
+    return None
+
+
+def build_descriptive_statistics(df: pd.DataFrame, metric_column: str) -> pd.DataFrame:
+    values = pd.to_numeric(df[metric_column], errors="coerce")
+    clean_values = values.dropna()
+    if clean_values.empty:
+        return pd.DataFrame()
+    rows = [
+        ("Rows", len(df)),
+        ("Numeric values", int(clean_values.count())),
+        ("Missing values", int(values.isna().sum())),
+        ("Sum", clean_values.sum()),
+        ("Mean", clean_values.mean()),
+        ("Median", clean_values.median()),
+        ("Std dev", clean_values.std()),
+        ("Minimum", clean_values.min()),
+        ("P10", clean_values.quantile(0.10)),
+        ("P25", clean_values.quantile(0.25)),
+        ("P75", clean_values.quantile(0.75)),
+        ("P90", clean_values.quantile(0.90)),
+        ("Maximum", clean_values.max()),
+    ]
+    return pd.DataFrame(rows, columns=["Statistic", "Value"])
+
+
+def build_grouped_descriptive_statistics(df: pd.DataFrame, metric_column: str, group_column: str) -> pd.DataFrame:
+    if group_column not in df.columns or metric_column not in df.columns:
+        return pd.DataFrame()
+    source = df[[group_column, metric_column]].copy()
+    source[metric_column] = pd.to_numeric(source[metric_column], errors="coerce")
+    source = source[source[metric_column].notna()].copy()
+    if source.empty:
+        return pd.DataFrame()
+    grouped = (
+        source
+        .groupby(group_column, dropna=False)[metric_column]
+        .agg(Count="count", Sum="sum", Mean="mean", Median="median", Minimum="min", Maximum="max")
+        .reset_index()
+        .sort_values("Sum", ascending=False)
+    )
+    for column in ["Sum", "Mean", "Median", "Minimum", "Maximum"]:
+        grouped[column] = pd.to_numeric(grouped[column], errors="coerce").round(3)
+    return grouped
+
+
+def build_monthly_trend(df: pd.DataFrame, metric_column: str, datetime_column: str) -> pd.DataFrame:
+    source = df[[datetime_column, metric_column]].copy()
+    source[datetime_column] = pd.to_datetime(source[datetime_column], errors="coerce", utc=True)
+    source[metric_column] = pd.to_numeric(source[metric_column], errors="coerce")
+    source = source[source[datetime_column].notna() & source[metric_column].notna()].copy()
+    if source.empty:
+        return pd.DataFrame()
+    source["Month"] = source[datetime_column].dt.to_period("M").astype(str)
+    trend = (
+        source
+        .groupby("Month", as_index=False)[metric_column]
+        .agg(Count="count", Sum="sum", Mean="mean", Median="median")
+        .sort_values("Month")
+    )
+    for column in ["Sum", "Mean", "Median"]:
+        trend[column] = pd.to_numeric(trend[column], errors="coerce").round(3)
+    return trend
+
+
+def render_descriptive_statistics_tab(
+    custom_df: pd.DataFrame,
+    reportpivots_df: pd.DataFrame,
+    shippivots_df: pd.DataFrame,
+) -> None:
+    st.markdown('<div class="section-title">Descriptive Statistics</div>', unsafe_allow_html=True)
+    st.caption("Analyze exactly the same filtered/export-ready tables from each source. No extra KPI logic is applied here.")
+
+    sources = {
+        "Custom Analytics": custom_df,
+        "Noon & Manual Reports": reportpivots_df,
+        "15-Minute Operations": shippivots_df,
+    }
+    available_sources = [label for label, df in sources.items() if isinstance(df, pd.DataFrame) and not df.empty]
+    if not available_sources:
+        st.info("No filtered source table is available for descriptive statistics yet.")
+        return
+
+    selected_source = st.selectbox("Source table", options=available_sources, key="atlas_descriptive_source")
+    analysis_df = sources[selected_source].copy()
+    numeric_options = dataframe_numeric_options(analysis_df)
+    if not numeric_options:
+        st.info("The selected source table has no numeric columns to analyze.")
+        return
+
+    metric_column = st.selectbox("Metric to analyze", options=numeric_options, key="atlas_descriptive_metric")
+    group_options = ["None"] + dataframe_categorical_options(analysis_df)
+    default_group_index = group_options.index("ShipName") if "ShipName" in group_options else 0
+    group_column = st.selectbox("Optional group by", options=group_options, index=default_group_index, key="atlas_descriptive_group")
+
+    stats_df = build_descriptive_statistics(analysis_df, metric_column)
+    if stats_df.empty:
+        st.info("No numeric values were found for the selected metric.")
+        return
+
+    values = pd.to_numeric(analysis_df[metric_column], errors="coerce")
+    render_metric_cards(
+        [
+            ("Numeric values", f"{values.notna().sum():,}", "table"),
+            ("Total", f"{values.sum(skipna=True):,.3f}", "database"),
+            ("Average", f"{values.mean(skipna=True):,.3f}", "nodes"),
+            ("Missing", f"{values.isna().sum():,}", "list"),
+        ]
+    )
+
+    st.markdown('<div class="section-title">Overall statistics</div>', unsafe_allow_html=True)
+    st.dataframe(format_display_dataframe(stats_df), use_container_width=True, hide_index=True)
+
+    if group_column != "None":
+        grouped_df = build_grouped_descriptive_statistics(analysis_df, metric_column, group_column)
+        if not grouped_df.empty:
+            st.markdown('<div class="section-title">Grouped statistics</div>', unsafe_allow_html=True)
+            st.dataframe(format_display_dataframe(grouped_df.head(100)), use_container_width=True, hide_index=True)
+
+    datetime_column = detect_analysis_datetime_column(analysis_df)
+    if datetime_column:
+        trend_df = build_monthly_trend(analysis_df, metric_column, datetime_column)
+        if not trend_df.empty:
+            st.markdown('<div class="section-title">Monthly trend</div>', unsafe_allow_html=True)
+            st.dataframe(format_display_dataframe(trend_df), use_container_width=True, hide_index=True)
+            chart_df = trend_df.set_index("Month")[["Sum", "Mean"]]
+            st.line_chart(chart_df)
+
+    outlier_values = values.dropna()
+    if len(outlier_values) >= 4:
+        q1 = outlier_values.quantile(0.25)
+        q3 = outlier_values.quantile(0.75)
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        outliers = analysis_df[(values < lower) | (values > upper)].copy()
+        if not outliers.empty:
+            st.markdown('<div class="section-title">Potential outlier rows</div>', unsafe_allow_html=True)
+            display_cols = [column for column in ["ShipName", "ReportType", "StartDateTimeGMT", "DateTime", metric_column] if column in outliers.columns]
+            if not display_cols:
+                display_cols = list(outliers.columns[: min(8, len(outliers.columns))])
+            st.dataframe(format_display_dataframe(outliers[display_cols].head(100)), use_container_width=True, hide_index=True)
+
+
 # =============================================================================
 # Sidebar/session helpers
 # =============================================================================
@@ -3591,7 +3875,7 @@ def fetch_report_data_to_snapshot(
         "hit_page_limit": pages >= MAX_ODATA_PAGES,
         "loaded_start_date": start_date.isoformat(),
         "snapshot_format": "parquet",
-        "reportdata_mode": "performance_kpis_python_whitelist",
+        "reportdata_mode": "atlasflow_consumption_oil_stats_whitelist",
         "value_description_whitelist_count": len(REPORTDATA_VALUE_WHITELIST),
     }
     signature = request_signature(username, auth_method, start_date)
@@ -3870,7 +4154,7 @@ def main() -> None:
         )
         st.stop()
 
-    prepare_signature = {**raw_signature, "prepare_version": "atlasflow_dynamic_pivot_v2_calculations"}
+    prepare_signature = {**raw_signature, "prepare_version": "atlasflow_dynamic_pivot_v3_oil_stats"}
     current_prepare_signature = st.session_state.get("loaded_prepare_signature")
     raw_df = st.session_state.get("loaded_raw_df")
     long_df = st.session_state.get("loaded_long_df")
@@ -3992,10 +4276,11 @@ def main() -> None:
 
     output_df = filtered_pivot_df[display_columns].copy()
 
-    tab_table, tab_reportpivots, tab_shippivots, tab_export, tab_diagnostics = st.tabs([
+    tab_table, tab_reportpivots, tab_shippivots, tab_descriptive, tab_export, tab_diagnostics = st.tabs([
         "Custom Analytics",
         "Noon & Manual Reports",
         "15-Minute Operations",
+        "Descriptive Statistics",
         "Export Center",
         "API Diagnostics",
     ])
@@ -4179,6 +4464,13 @@ def main() -> None:
             selected_vessels,
             selected_start,
             selected_end,
+        )
+
+    with tab_descriptive:
+        render_descriptive_statistics_tab(
+            output_df,
+            reportpivots_output_df,
+            shippivots_output_df,
         )
 
     with tab_export:
