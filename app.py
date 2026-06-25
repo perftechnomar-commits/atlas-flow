@@ -398,1031 +398,14 @@ def apply_custom_css() -> None:
         """
         <style>
         :root {
-            --bg: #F7FAFA;
-            --bg-deep: #EAF3F2;
-            --panel: #FFFFFF;
-            --panel-soft: #F0F7F6;
-            --panel-glass: rgba(255, 255, 255, 0.86);
-            --border: rgba(15, 118, 110, 0.22);
-            --border-strong: rgba(15, 118, 110, 0.42);
-            --text: #0F172A;
-            --text-soft: #475569;
-            --primary: #0F766E;
-            --secondary: #14B8A6;
-            --accent: #0D9488;
-            --input-bg: rgba(255, 255, 255, 0.96);
-            --sidebar-bg: #073B3A;
-            --sidebar-bg-deep: #042F2E;
-            --sidebar-text: #F8FAFC;
-            --sidebar-text-soft: #CCFBF1;
-        }
-
-        .stApp {
-            background:
-                radial-gradient(circle at top left, rgba(20, 184, 166, 0.16), transparent 34rem),
-                radial-gradient(circle at top right, rgba(15, 118, 110, 0.10), transparent 30rem),
-                linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(234, 243, 242, 0.74)),
-                var(--bg);
-            background-position: center center;
-            background-size: cover;
-            background-attachment: fixed;
-            color: var(--text);
-        }
-
-        header[data-testid="stHeader"],
-        header[data-testid="stHeader"] > div,
-        div[data-testid="stToolbar"],
-        div[data-testid="stDecoration"] {
-            background: transparent !important;
-            border: 0 !important;
-            box-shadow: none !important;
-        }
-
-        .block-container {
-            padding-top: 3.2rem;
-            padding-bottom: 3rem;
-            max-width: 1380px;
-        }
-
-        section[data-testid="stSidebar"] {
-            background:
-                radial-gradient(circle at top left, rgba(20, 184, 166, 0.18), transparent 18rem),
-                linear-gradient(180deg, var(--sidebar-bg) 0%, var(--sidebar-bg-deep) 100%) !important;
-            border-right: 1px solid var(--border);
-        }
-
-        section[data-testid="stSidebar"] > div {
-            padding-bottom: 8rem !important;
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-            gap: 0.7rem;
-        }
-
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] p,
-        section[data-testid="stSidebar"] span {
-            color: var(--sidebar-text) !important;
-        }
-
-        section[data-testid="stSidebar"] label {
-            font-weight: 750 !important;
-        }
-
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3 {
-            color: var(--sidebar-text) !important;
-        }
-
-
-        section[data-testid="stSidebar"] small,
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
-            color: var(--sidebar-text-soft) !important;
-        }
-
-        div[data-baseweb="select"] > div,
-        div[data-baseweb="input"],
-        textarea {
-            background-color: var(--input-bg) !important;
-            border: 1px solid rgba(15, 118, 110, 0.22) !important;
-            border-radius: 14px !important;
-            box-shadow: none !important;
-            outline: none !important;
-            color: var(--text) !important;
-            overflow: hidden !important;
-        }
-
-        div[data-baseweb="select"] > div:hover,
-        div[data-baseweb="input"]:hover,
-        textarea:hover {
-            border-color: rgba(20, 184, 166, 0.52) !important;
-        }
-
-        div[data-baseweb="select"] > div:focus-within,
-        div[data-baseweb="input"]:focus-within,
-        textarea:focus {
-            border-color: var(--secondary) !important;
-            box-shadow: none !important;
-            outline: none !important;
-        }
-
-        div[data-baseweb="input"] > div,
-        div[data-baseweb="input"] > div > div,
-        div[data-baseweb="input"] [data-baseweb="base-input"],
-        div[data-baseweb="input"] input,
-        [data-testid="stTextInput"] input,
-        [data-testid="stDateInput"] input,
-        textarea {
-            background: transparent !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            box-shadow: none !important;
-            outline: none !important;
-            color: var(--text) !important;
-            caret-color: var(--secondary) !important;
-        }
-
-        div[data-baseweb="input"] button,
-        [data-testid="stTextInput"] button,
-        div[data-baseweb="input"] [role="button"],
-        [data-testid="stTextInput"] [role="button"] {
-            background: transparent !important;
-            border: 0 !important;
-            box-shadow: none !important;
-            outline: none !important;
-            color: var(--text-soft) !important;
-        }
-
-        [data-baseweb="tag"] {
-            background: linear-gradient(135deg, rgba(15, 118, 110, 0.14), rgba(20, 184, 166, 0.12)) !important;
-            border: 1px solid rgba(15, 118, 110, 0.34) !important;
-            color: var(--text) !important;
-            border-radius: 999px !important;
-        }
-
-        [data-baseweb="tag"] span,
-        [data-baseweb="tag"] svg {
-            color: var(--text) !important;
-        }
-
-        .dashboard-hero {
-            padding: 1.8rem 2rem;
-            border: 1px solid var(--border);
-            border-radius: 24px;
-            background:
-                linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 247, 246, 0.90)),
-                linear-gradient(90deg, rgba(15, 118, 110, 0.12), rgba(20, 184, 166, 0.08));
-            box-shadow:
-                0 20px 54px rgba(15, 23, 42, 0.10),
-                inset 0 1px 0 rgba(255, 255, 255, 0.84);
-            backdrop-filter: blur(10px);
-            margin-bottom: 1.1rem;
-        }
-
-        .eyebrow {
-            color: var(--secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.16em;
-            font-size: 0.78rem;
-            font-weight: 850;
-            margin-bottom: 0.35rem;
-        }
-
-        .dashboard-title {
-            font-size: clamp(2.4rem, 4vw, 4.4rem);
-            line-height: 1.02;
-            font-weight: 950;
-            color: var(--text);
-            margin: 0;
-            text-shadow: none;
-        }
-
-        .dashboard-subtitle {
-            color: var(--text-soft);
-            font-size: 1rem;
-            margin-top: 0.8rem;
-            text-shadow: none;
-        }
-
-        .section-title {
-            font-size: 1.35rem;
-            font-weight: 850;
-            color: var(--text);
-            margin: 1.5rem 0 0.75rem 0;
-        }
-
-        .api-load-caption,
-        .atlas-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            margin: -0.2rem 0 1.0rem 0;
-            padding: 0.38rem 0.72rem;
-            border: 1px solid rgba(15, 118, 110, 0.20);
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.82);
-            color: var(--text-soft);
-            font-size: 0.80rem;
-            font-weight: 650;
-            backdrop-filter: blur(6px);
-        }
-
-        .api-load-caption span,
-        .atlas-pill span {
-            color: var(--text);
-            font-weight: 800;
-        }
-
-        div[data-testid="stMetric"] {
-            background:
-                linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(240, 247, 246, 0.86)) !important;
-            border: 1px solid rgba(15, 118, 110, 0.20) !important;
-            border-radius: 18px !important;
-            padding: 0.85rem 1rem !important;
-            box-shadow:
-                0 12px 28px rgba(15, 23, 42, 0.08),
-                inset 0 1px 0 rgba(255, 255, 255, 0.86) !important;
-        }
-
-        div[data-testid="stMetricLabel"] p {
-            color: var(--text-soft) !important;
-            font-weight: 800 !important;
-        }
-
-        div[data-testid="stMetricValue"] {
-            color: var(--text) !important;
-            font-weight: 950 !important;
-        }
-
-        div[data-testid="stDataFrame"] {
-            border: 1px solid rgba(15, 118, 110, 0.18);
-            border-radius: 18px;
-            overflow: hidden;
-            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.10);
-        }
-
-        button[data-baseweb="tab"] {
-            color: var(--text-soft) !important;
-            font-weight: 750 !important;
-        }
-
-        button[data-baseweb="tab"][aria-selected="true"] {
-            color: var(--secondary) !important;
-        }
-
-        div[data-baseweb="tab-highlight"] {
-            background-color: var(--secondary) !important;
-        }
-
-        .stDownloadButton button,
-        .stButton button {
-            border-radius: 14px !important;
-            border: 1px solid rgba(15, 118, 110, 0.45) !important;
-            background: linear-gradient(135deg, var(--primary), var(--secondary)) !important;
-            color: var(--text) !important;
-            font-weight: 850 !important;
-            box-shadow: 0 10px 24px rgba(15, 118, 110, 0.18) !important;
-        }
-
-        .stDownloadButton button:hover,
-        .stButton button:hover {
-            border-color: rgba(20, 184, 166, 0.70) !important;
-            filter: brightness(1.06);
-        }
-
-        div[data-testid="stAlert"],
-        div[data-testid="stAlert"] > div,
-        div[data-testid="stAlert"] [role="alert"] {
-            background: rgba(255, 255, 255, 0.90) !important;
-            border: 1px solid rgba(15, 118, 110, 0.18) !important;
-            color: var(--text) !important;
-            border-radius: 14px !important;
-            box-shadow: none !important;
-        }
-
-        div[data-testid="stSlider"] [role="slider"] {
-            background-color: var(--secondary) !important;
-            border-color: var(--secondary) !important;
-            box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.24) !important;
-        }
-
-        div[data-testid="stSlider"] {
-            accent-color: var(--secondary) !important;
-        }
-
-
-        /* White/teal readability fixes */
-        .stApp,
-        .stApp p,
-        .stApp span,
-        .stApp label,
-        .stApp div {
-            color: var(--text);
-        }
-
-        .stApp [data-testid="stMarkdownContainer"] p,
-        .stApp [data-testid="stMarkdownContainer"] span,
-        .stApp [data-testid="stCaptionContainer"],
-        .stApp [data-testid="stCaptionContainer"] p {
-            color: var(--text-soft) !important;
-        }
-
-        .stApp h1,
-        .stApp h2,
-        .stApp h3,
-        .stApp h4,
-        .stApp h5,
-        .stApp h6,
-        .stApp strong {
-            color: var(--text) !important;
-        }
-
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] p,
-        section[data-testid="stSidebar"] span,
-        section[data-testid="stSidebar"] div,
-        section[data-testid="stSidebar"] small {
-            color: var(--sidebar-text) !important;
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p,
-        section[data-testid="stSidebar"] small {
-            color: var(--sidebar-text-soft) !important;
-        }
-
-        /* Inputs and dropdowns: keep white panels readable */
-        div[data-baseweb="select"] > div,
-        div[data-baseweb="input"],
-        [data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
-        [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-            background: #FFFFFF !important;
-            color: var(--text) !important;
-        }
-
-        div[data-baseweb="select"] span,
-        div[data-baseweb="select"] input,
-        div[data-baseweb="input"] input,
-        [data-testid="stTextInput"] input {
-            color: var(--text) !important;
-            -webkit-text-fill-color: var(--text) !important;
-        }
-
-        div[data-baseweb="select"] svg,
-        div[data-baseweb="input"] svg {
-            color: var(--text-soft) !important;
-            fill: var(--text-soft) !important;
-        }
-
-        [data-baseweb="popover"],
-        [data-baseweb="menu"],
-        [role="listbox"] {
-            background: #FFFFFF !important;
-            color: var(--text) !important;
-        }
-
-        [role="option"],
-        [role="option"] span,
-        [data-baseweb="menu"] li,
-        [data-baseweb="menu"] span {
-            color: var(--text) !important;
-            -webkit-text-fill-color: var(--text) !important;
-        }
-
-        [role="option"]:hover,
-        [data-baseweb="menu"] li:hover {
-            background: rgba(20, 184, 166, 0.10) !important;
-        }
-
-        /* Multiselect chips: visible text on light chip */
-        [data-baseweb="tag"] {
-            background: #DDF7F2 !important;
-            border: 1px solid rgba(15, 118, 110, 0.32) !important;
-            color: #0F172A !important;
-        }
-
-        [data-baseweb="tag"] span,
-        [data-baseweb="tag"] svg,
-        section[data-testid="stSidebar"] [data-baseweb="tag"] span,
-        section[data-testid="stSidebar"] [data-baseweb="tag"] svg {
-            color: #0F172A !important;
-            fill: #0F172A !important;
-            -webkit-text-fill-color: #0F172A !important;
-        }
-
-        /* Radio controls and helper text */
-        [data-testid="stRadio"] label,
-        [data-testid="stRadio"] label span,
-        [data-testid="stRadio"] div,
-        [data-testid="stRadio"] p {
-            color: var(--text) !important;
-            -webkit-text-fill-color: var(--text) !important;
-        }
-
-        [data-testid="stRadio"] [role="radiogroup"] label {
-            background: rgba(255, 255, 255, 0.64) !important;
-            border-radius: 999px !important;
-            padding: 0.18rem 0.45rem !important;
-        }
-
-        /* Buttons should remain readable on teal gradients */
-        .stDownloadButton button,
-        .stButton button {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        .stDownloadButton button p,
-        .stButton button p,
-        .stDownloadButton button span,
-        .stButton button span {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        /* Metrics and cards */
-        div[data-testid="stMetricLabel"] p,
-        div[data-testid="stMetricLabel"] span {
-            color: var(--text-soft) !important;
-            -webkit-text-fill-color: var(--text-soft) !important;
-        }
-
-        div[data-testid="stMetricValue"],
-        div[data-testid="stMetricValue"] div,
-        div[data-testid="stMetricValue"] span {
-            color: var(--text) !important;
-            -webkit-text-fill-color: var(--text) !important;
-        }
-
-        /* Expanders */
-        [data-testid="stExpander"],
-        [data-testid="stExpander"] div,
-        [data-testid="stExpander"] span,
-        [data-testid="stExpander"] p {
-            color: var(--text) !important;
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stExpander"],
-        section[data-testid="stSidebar"] [data-testid="stExpander"] div,
-        section[data-testid="stSidebar"] [data-testid="stExpander"] span,
-        section[data-testid="stSidebar"] [data-testid="stExpander"] p {
-            color: var(--sidebar-text) !important;
-        }
-
-        /* Dataframe light frame. Streamlit grid internals may still use their own theme, but headers/captions remain visible. */
-        div[data-testid="stDataFrame"] {
-            background: #FFFFFF !important;
-        }
-
-
-
-        /* Final SaaS white/teal polish */
-        :root {
-            --bg: #F6FBFA;
-            --bg-deep: #EEF7F6;
-            --panel: #FFFFFF;
-            --panel-soft: #F8FCFB;
-            --text: #0B1F33;
-            --text-soft: #475569;
-            --primary: #006B66;
-            --secondary: #00A6A0;
-            --accent: #0F766E;
-            --sidebar-bg: #00645F;
-            --sidebar-bg-deep: #003F3B;
-            --sidebar-text: #FFFFFF;
-            --sidebar-text-soft: #D7FFFA;
-        }
-
-        html, body, .stApp {
-            font-family: "Aptos", "Segoe UI", "Inter", system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
-        }
-
-        .stApp {
-            background:
-                radial-gradient(circle at top right, rgba(0, 166, 160, 0.11), transparent 38rem),
-                radial-gradient(circle at top left, rgba(0, 107, 102, 0.08), transparent 32rem),
-                linear-gradient(180deg, #FFFFFF 0%, #F6FBFA 48%, #EEF7F6 100%) !important;
-        }
-
-        .block-container {
-            max-width: 1450px !important;
-            padding-top: 3.1rem !important;
-        }
-
-        header[data-testid="stHeader"] {
-            background: rgba(255, 255, 255, 0.84) !important;
-            border-bottom: 1px solid rgba(15, 23, 42, 0.08) !important;
-            backdrop-filter: blur(10px) !important;
-        }
-
-        section[data-testid="stSidebar"] {
-            background:
-                radial-gradient(circle at top left, rgba(20, 184, 166, 0.26), transparent 18rem),
-                linear-gradient(180deg, var(--sidebar-bg) 0%, var(--sidebar-bg-deep) 100%) !important;
-            border-right: 1px solid rgba(255, 255, 255, 0.14) !important;
-            box-shadow: 14px 0 34px rgba(15, 23, 42, 0.12) !important;
-        }
-
-        /* Sidebar labels must stay white on dark teal */
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] label p,
-        section[data-testid="stSidebar"] label span,
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3,
-        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
-        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] span,
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
-            color: var(--sidebar-text) !important;
-            -webkit-text-fill-color: var(--sidebar-text) !important;
-            font-weight: 750 !important;
-        }
-
-        section[data-testid="stSidebar"] .stCaptionContainer,
-        section[data-testid="stSidebar"] small,
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
-            color: var(--sidebar-text-soft) !important;
-            -webkit-text-fill-color: var(--sidebar-text-soft) !important;
-        }
-
-        section[data-testid="stSidebar"] button[kind="primary"],
-        section[data-testid="stSidebar"] .stButton button {
-            background: linear-gradient(135deg, #008D86, #0CC9C2) !important;
-            border: 1px solid rgba(255, 255, 255, 0.28) !important;
-            color: #FFFFFF !important;
-            border-radius: 14px !important;
-            box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18) !important;
-        }
-
-        section[data-testid="stSidebar"] div[data-baseweb="select"] > div,
-        section[data-testid="stSidebar"] div[data-baseweb="input"],
-        section[data-testid="stSidebar"] [data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
-        section[data-testid="stSidebar"] [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-            background: #FFFFFF !important;
-            border: 1px solid rgba(255, 255, 255, 0.48) !important;
-            border-radius: 14px !important;
-            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12) !important;
-        }
-
-        section[data-testid="stSidebar"] div[data-baseweb="select"] span,
-        section[data-testid="stSidebar"] div[data-baseweb="select"] input,
-        section[data-testid="stSidebar"] div[data-baseweb="input"] input {
-            color: var(--text) !important;
-            -webkit-text-fill-color: var(--text) !important;
-        }
-
-        section[data-testid="stSidebar"] [data-baseweb="tag"] {
-            background: #D7F4F1 !important;
-            border: 1px solid rgba(0, 107, 102, 0.26) !important;
-            border-radius: 999px !important;
-        }
-
-        section[data-testid="stSidebar"] [data-baseweb="tag"] span,
-        section[data-testid="stSidebar"] [data-baseweb="tag"] svg {
-            color: #12313E !important;
-            -webkit-text-fill-color: #12313E !important;
-            fill: #12313E !important;
-        }
-
-        .dashboard-hero {
-            padding: 2.0rem 2.15rem !important;
-            border-radius: 22px !important;
-            border: 1px solid rgba(0, 107, 102, 0.18) !important;
-            background:
-                linear-gradient(135deg, rgba(255,255,255,0.98), rgba(248,252,251,0.94)) !important;
-            box-shadow:
-                0 18px 52px rgba(15, 23, 42, 0.10),
-                inset 0 1px 0 rgba(255, 255, 255, 0.92) !important;
-        }
-
-        .eyebrow {
-            color: #007C77 !important;
-            letter-spacing: 0.18em !important;
-            font-weight: 900 !important;
-        }
-
-        .dashboard-title {
-            color: #0B1F33 !important;
-            font-family: "Aptos Display", "Aptos", "Segoe UI", system-ui, sans-serif !important;
-            font-size: clamp(2.7rem, 4.2vw, 4.6rem) !important;
-            font-weight: 950 !important;
-            letter-spacing: -0.04em !important;
-            line-height: 0.98 !important;
-        }
-
-        .dashboard-subtitle {
-            color: #334155 !important;
-            font-weight: 500 !important;
-        }
-
-        .api-load-caption,
-        .atlas-pill {
-            background: rgba(255,255,255,0.92) !important;
-            border: 1px solid rgba(0, 107, 102, 0.18) !important;
-            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06) !important;
-            color: #334155 !important;
-        }
-
-        button[data-baseweb="tab"] {
-            color: #475569 !important;
-            font-weight: 750 !important;
-        }
-
-        button[data-baseweb="tab"][aria-selected="true"] {
-            color: #007C77 !important;
-        }
-
-        div[data-baseweb="tab-highlight"] {
-            background-color: #00A6A0 !important;
-            height: 3px !important;
-        }
-
-        .section-title,
-        .stApp h1,
-        .stApp h2,
-        .stApp h3,
-        .stApp h4,
-        .stApp strong {
-            color: #0B1F33 !important;
-            -webkit-text-fill-color: #0B1F33 !important;
-        }
-
-        .stApp [data-testid="stCaptionContainer"] p,
-        .stApp [data-testid="stMarkdownContainer"] p {
-            color: #475569 !important;
-            -webkit-text-fill-color: #475569 !important;
-        }
-
-        [data-testid="stRadio"] label,
-        [data-testid="stRadio"] label span,
-        [data-testid="stRadio"] p {
-            color: #0B1F33 !important;
-            -webkit-text-fill-color: #0B1F33 !important;
-        }
-
-        [data-testid="stRadio"] [role="radiogroup"] label {
-            background: #FFFFFF !important;
-            border: 1px solid rgba(0, 107, 102, 0.13) !important;
-            border-radius: 999px !important;
-            padding: 0.30rem 0.70rem !important;
-            box-shadow: 0 4px 12px rgba(15,23,42,0.04) !important;
-        }
-
-        div[data-testid="stMetric"] {
-            background: #FFFFFF !important;
-            border: 1px solid rgba(0, 107, 102, 0.14) !important;
-            border-radius: 18px !important;
-            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08) !important;
-            min-height: 92px !important;
-        }
-
-        div[data-testid="stMetricLabel"] p,
-        div[data-testid="stMetricLabel"] span {
-            color: #334155 !important;
-            -webkit-text-fill-color: #334155 !important;
-            font-weight: 700 !important;
-        }
-
-        div[data-testid="stMetricValue"],
-        div[data-testid="stMetricValue"] div,
-        div[data-testid="stMetricValue"] span {
-            color: #0B1F33 !important;
-            -webkit-text-fill-color: #0B1F33 !important;
-            font-weight: 950 !important;
-        }
-
-        div[data-testid="stDataFrame"] {
-            border: 1px solid rgba(0, 107, 102, 0.16) !important;
-            border-radius: 16px !important;
-            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.09) !important;
-            background: #FFFFFF !important;
-        }
-
-        .stDownloadButton button,
-        .stButton button {
-            background: linear-gradient(135deg, #007C77, #0BBDB6) !important;
-            border: 1px solid rgba(0, 107, 102, 0.34) !important;
-            border-radius: 14px !important;
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            font-weight: 850 !important;
-        }
-
-        [data-testid="stExpander"] {
-            background: rgba(255,255,255,0.06) !important;
-            border: 1px solid rgba(255,255,255,0.18) !important;
-            border-radius: 12px !important;
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stExpander"] summary,
-        section[data-testid="stSidebar"] [data-testid="stExpander"] summary p,
-        section[data-testid="stSidebar"] [data-testid="stExpander"] summary span {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-
-        /* AtlasFlow SaaS v2 - closer to the approved mockup */
-        :root {
-            --bg: #F7FBFA;
-            --panel: #FFFFFF;
-            --teal-950: #042F2E;
-            --teal-900: #064E4B;
-            --teal-800: #075E5A;
-            --teal-700: #007C77;
-            --teal-600: #0D9488;
-            --teal-500: #14B8A6;
-            --ink: #0A2239;
-            --muted: #475569;
-            --line: rgba(7, 94, 90, 0.16);
-        }
-
-        html, body, .stApp {
-            font-family: "Aptos", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
-        }
-
-        .stApp {
-            background:
-                radial-gradient(circle at top right, rgba(20,184,166,0.13), transparent 42rem),
-                radial-gradient(circle at 23rem 12rem, rgba(7,94,90,0.07), transparent 28rem),
-                linear-gradient(180deg, #FFFFFF 0%, #F8FCFB 42%, #EEF8F6 100%) !important;
-            color: var(--ink) !important;
-        }
-
-        header[data-testid="stHeader"] {
-            background: rgba(255,255,255,0.92) !important;
-            border-bottom: 1px solid rgba(15, 23, 42, 0.08) !important;
-            box-shadow: 0 1px 16px rgba(15, 23, 42, 0.05) !important;
-            backdrop-filter: blur(12px) !important;
-        }
-
-        .block-container {
-            max-width: 1410px !important;
-            padding-top: 3.2rem !important;
-            padding-left: 3.3rem !important;
-            padding-right: 3.3rem !important;
-        }
-
-        section[data-testid="stSidebar"] {
-            width: 310px !important;
-            background:
-                radial-gradient(circle at top left, rgba(20,184,166,0.24), transparent 18rem),
-                linear-gradient(180deg, var(--teal-800) 0%, var(--teal-950) 100%) !important;
-            box-shadow: 16px 0 34px rgba(2, 44, 42, 0.16) !important;
-            border-right: 1px solid rgba(255,255,255,0.18) !important;
-        }
-
-        section[data-testid="stSidebar"] > div {
-            padding-top: 2.15rem !important;
-            padding-left: 1.1rem !important;
-            padding-right: 1.1rem !important;
-        }
-
-        /* Sidebar text: force high contrast on the dark teal panel */
-        section[data-testid="stSidebar"],
-        section[data-testid="stSidebar"] *,
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] label *,
-        section[data-testid="stSidebar"] p,
-        section[data-testid="stSidebar"] span,
-        section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] *,
-        section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] * {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] label p,
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3 {
-            font-weight: 850 !important;
-            letter-spacing: -0.01em !important;
-        }
-
-        section[data-testid="stSidebar"] .stCaptionContainer,
-        section[data-testid="stSidebar"] small,
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
-            color: #D7FFFA !important;
-            -webkit-text-fill-color: #D7FFFA !important;
-            font-weight: 650 !important;
-        }
-
-        /* White controls inside sidebar */
-        section[data-testid="stSidebar"] div[data-baseweb="select"] > div,
-        section[data-testid="stSidebar"] div[data-baseweb="input"],
-        section[data-testid="stSidebar"] [data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
-        section[data-testid="stSidebar"] [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-            background: #FFFFFF !important;
-            border: 1px solid rgba(255,255,255,0.70) !important;
-            border-radius: 13px !important;
-            box-shadow: 0 9px 22px rgba(0, 0, 0, 0.13) !important;
-            min-height: 43px !important;
-        }
-
-        section[data-testid="stSidebar"] div[data-baseweb="select"] > div *,
-        section[data-testid="stSidebar"] div[data-baseweb="input"] *,
-        section[data-testid="stSidebar"] input {
-            color: var(--ink) !important;
-            -webkit-text-fill-color: var(--ink) !important;
-        }
-
-        section[data-testid="stSidebar"] div[data-baseweb="select"] svg,
-        section[data-testid="stSidebar"] div[data-baseweb="input"] svg {
-            color: #334155 !important;
-            fill: #334155 !important;
-        }
-
-        section[data-testid="stSidebar"] [data-baseweb="tag"] {
-            background: #DDF7F2 !important;
-            border: 1px solid rgba(7, 94, 90, 0.22) !important;
-            border-radius: 999px !important;
-            box-shadow: none !important;
-        }
-
-        section[data-testid="stSidebar"] [data-baseweb="tag"] *,
-        section[data-testid="stSidebar"] [data-baseweb="tag"] span,
-        section[data-testid="stSidebar"] [data-baseweb="tag"] svg {
-            color: #12313E !important;
-            -webkit-text-fill-color: #12313E !important;
-            fill: #12313E !important;
-            font-weight: 650 !important;
-        }
-
-        .stButton button,
-        .stDownloadButton button {
-            border-radius: 13px !important;
-            border: 1px solid rgba(0,124,119,0.28) !important;
-            background: linear-gradient(135deg, #007C77, #0BBDB6) !important;
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            font-weight: 850 !important;
-            box-shadow: 0 10px 22px rgba(0,124,119,0.20) !important;
-        }
-        .stButton button *, .stDownloadButton button * {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        .dashboard-hero {
-            padding: 2.05rem 2.15rem !important;
-            min-height: 185px !important;
-            border-radius: 22px !important;
-            border: 1px solid rgba(7,94,90,0.15) !important;
-            background:
-                linear-gradient(135deg, rgba(255,255,255,0.99), rgba(248,252,251,0.95)) !important;
-            box-shadow:
-                0 18px 48px rgba(15, 23, 42, 0.09),
-                inset 0 1px 0 rgba(255,255,255,0.94) !important;
-            margin-bottom: 1.05rem !important;
-        }
-
-        .eyebrow {
-            color: #007C77 !important;
-            -webkit-text-fill-color: #007C77 !important;
-            font-weight: 900 !important;
-            letter-spacing: 0.22em !important;
-            font-size: 0.78rem !important;
-        }
-
-        .dashboard-title {
-            color: var(--ink) !important;
-            -webkit-text-fill-color: var(--ink) !important;
-            font-family: "Aptos", "Segoe UI", system-ui, sans-serif !important;
-            font-size: clamp(2.45rem, 3.7vw, 3.7rem) !important;
-            font-weight: 900 !important;
-            letter-spacing: -0.025em !important;
-            line-height: 1.05 !important;
-            margin-top: 0.55rem !important;
-            text-shadow: none !important;
-        }
-
-        .dashboard-subtitle {
-            color: #334155 !important;
-            -webkit-text-fill-color: #334155 !important;
-            font-size: 1.02rem !important;
-            font-weight: 550 !important;
-            margin-top: 1.15rem !important;
-        }
-
-        .api-load-caption,
-        .atlas-pill {
-            background: rgba(255,255,255,0.92) !important;
-            border: 1px solid rgba(7,94,90,0.15) !important;
-            box-shadow: 0 8px 20px rgba(15,23,42,0.06) !important;
-            color: #334155 !important;
-            -webkit-text-fill-color: #334155 !important;
-            font-weight: 700 !important;
-        }
-        .api-load-caption span, .atlas-pill span {
-            color: var(--ink) !important;
-            -webkit-text-fill-color: var(--ink) !important;
-        }
-
-        button[data-baseweb="tab"] {
-            color: #475569 !important;
-            -webkit-text-fill-color: #475569 !important;
-            font-weight: 750 !important;
-        }
-        button[data-baseweb="tab"] * {
-            color: inherit !important;
-            -webkit-text-fill-color: inherit !important;
-        }
-        button[data-baseweb="tab"][aria-selected="true"] {
-            color: #007C77 !important;
-            -webkit-text-fill-color: #007C77 !important;
-        }
-        div[data-baseweb="tab-highlight"] {
-            background-color: #00A6A0 !important;
-            height: 3px !important;
-        }
-
-        .section-title,
-        .stApp h1,
-        .stApp h2,
-        .stApp h3,
-        .stApp h4,
-        .stApp strong {
-            color: var(--ink) !important;
-            -webkit-text-fill-color: var(--ink) !important;
-        }
-        .stApp [data-testid="stMarkdownContainer"] p,
-        .stApp [data-testid="stCaptionContainer"] p {
-            color: #475569 !important;
-            -webkit-text-fill-color: #475569 !important;
-        }
-
-        [data-testid="stRadio"] label,
-        [data-testid="stRadio"] label *,
-        [data-testid="stRadio"] p {
-            color: var(--ink) !important;
-            -webkit-text-fill-color: var(--ink) !important;
-        }
-        [data-testid="stRadio"] [role="radiogroup"] label {
-            background: #FFFFFF !important;
-            border: 1px solid rgba(7,94,90,0.13) !important;
-            border-radius: 999px !important;
-            padding: 0.30rem 0.70rem !important;
-            box-shadow: 0 4px 12px rgba(15,23,42,0.04) !important;
-        }
-
-        div[data-testid="stMetric"] {
-            background: #FFFFFF !important;
-            border: 1px solid rgba(7,94,90,0.13) !important;
-            border-radius: 18px !important;
-            box-shadow: 0 12px 28px rgba(15,23,42,0.075) !important;
-            padding: 1.0rem 1.15rem !important;
-            min-height: 98px !important;
-        }
-        div[data-testid="stMetricLabel"] p,
-        div[data-testid="stMetricLabel"] span {
-            color: #334155 !important;
-            -webkit-text-fill-color: #334155 !important;
-            font-weight: 700 !important;
-        }
-        div[data-testid="stMetricValue"],
-        div[data-testid="stMetricValue"] * {
-            color: var(--ink) !important;
-            -webkit-text-fill-color: var(--ink) !important;
-            font-weight: 950 !important;
-        }
-
-        /* DataFrame frame: if Streamlit grid internals remain dark, this still gives the SaaS shell around it */
-        div[data-testid="stDataFrame"] {
-            background: #FFFFFF !important;
-            border: 1px solid rgba(7,94,90,0.16) !important;
-            border-radius: 16px !important;
-            box-shadow: 0 14px 34px rgba(15,23,42,0.085) !important;
-        }
-        div[data-testid="stDataFrame"] * {
-            font-family: "Aptos", "Segoe UI", system-ui, sans-serif !important;
-        }
-
-        /* Expander in sidebar */
-        section[data-testid="stSidebar"] [data-testid="stExpander"] {
-            background: rgba(255,255,255,0.08) !important;
-            border: 1px solid rgba(255,255,255,0.24) !important;
-            border-radius: 12px !important;
-        }
-        section[data-testid="stSidebar"] [data-testid="stExpander"] summary,
-        section[data-testid="stSidebar"] [data-testid="stExpander"] summary * {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            font-weight: 850 !important;
-        }
-
-        /* Dropdown menus */
-        [data-baseweb="popover"],
-        [data-baseweb="menu"],
-        [role="listbox"] {
-            background: #FFFFFF !important;
-            color: var(--ink) !important;
-        }
-        [role="option"], [role="option"] *, [data-baseweb="menu"] * {
-            color: var(--ink) !important;
-            -webkit-text-fill-color: var(--ink) !important;
-        }
-
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        """
-        <style>
-        :root {
             --atlas-topbar-h: 67px;
             --atlas-sidebar-w: 324px;
             --atlas-ink: #0B1F33;
             --atlas-muted: #24364F;
             --atlas-soft: #64748B;
             --atlas-teal: #006B68;
-            --atlas-teal-2: #008B86;
+            --atlas-teal-bright: #0AAEA6;
             --atlas-line: #D9E6E5;
-            --atlas-panel: #FFFFFF;
             --atlas-bg: #FAFCFC;
             --atlas-chip: #DDF4F2;
         }
@@ -1558,8 +541,8 @@ def apply_custom_css() -> None:
             }
 
             section[data-testid="stSidebar"] > div {
-                padding: 1.25rem 1.25rem 6rem 1.25rem !important;
                 height: calc(100vh - var(--atlas-topbar-h)) !important;
+                padding: 1.25rem 1.25rem 6rem 1.25rem !important;
             }
 
             .block-container {
@@ -1569,18 +552,9 @@ def apply_custom_css() -> None:
         }
 
         @media (max-width: 768px) {
-            .atlas-brand-word {
-                font-size: 1.35rem;
-            }
-
-            .atlas-logo-mark {
-                width: 28px;
-                height: 28px;
-            }
-
-            .block-container {
-                padding: 5.2rem 1rem 2rem 1rem !important;
-            }
+            .atlas-brand-word { font-size: 1.35rem; }
+            .atlas-logo-mark { width: 28px; height: 28px; }
+            .block-container { padding: 5.2rem 1rem 2rem 1rem !important; }
         }
 
         section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
@@ -1590,8 +564,12 @@ def apply_custom_css() -> None:
         section[data-testid="stSidebar"] h1,
         section[data-testid="stSidebar"] h2,
         section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
         section[data-testid="stSidebar"] label,
         section[data-testid="stSidebar"] label *,
+        section[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+        section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] *,
         section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] *,
         section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
             color: #FFFFFF !important;
@@ -1610,17 +588,6 @@ def apply_custom_css() -> None:
         section[data-testid="stSidebar"] small {
             color: #D7FFFA !important;
             -webkit-text-fill-color: #D7FFFA !important;
-            font-weight: 650 !important;
-        }
-
-        section[data-testid="stSidebar"] .stButton button {
-            min-height: 39px !important;
-            padding: 0.35rem 1.05rem !important;
-            border-radius: 8px !important;
-            background: linear-gradient(135deg, #078A86, #12B7AF) !important;
-            border: 1px solid rgba(255, 255, 255, 0.24) !important;
-            box-shadow: none !important;
-            font-weight: 800 !important;
         }
 
         section[data-testid="stSidebar"] div[data-baseweb="select"] > div,
@@ -1641,6 +608,20 @@ def apply_custom_css() -> None:
             -webkit-text-fill-color: var(--atlas-ink) !important;
         }
 
+        section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+        section[data-testid="stSidebar"] div[data-testid="stButton"] button *,
+        section[data-testid="stSidebar"] .stButton button,
+        section[data-testid="stSidebar"] .stButton button * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-baseweb="select"] svg,
+        section[data-testid="stSidebar"] div[data-baseweb="input"] svg {
+            color: #334155 !important;
+            fill: #334155 !important;
+        }
+
         section[data-testid="stSidebar"] [data-baseweb="tag"] {
             background: var(--atlas-chip) !important;
             border: 1px solid rgba(0, 107, 104, 0.22) !important;
@@ -1654,7 +635,6 @@ def apply_custom_css() -> None:
             color: #12313E !important;
             -webkit-text-fill-color: #12313E !important;
             fill: #12313E !important;
-            font-weight: 650 !important;
         }
 
         section[data-testid="stSidebar"] [data-testid="stExpander"] {
@@ -1668,7 +648,104 @@ def apply_custom_css() -> None:
         section[data-testid="stSidebar"] [data-testid="stExpander"] summary * {
             color: #FFFFFF !important;
             -webkit-text-fill-color: #FFFFFF !important;
-            font-weight: 800 !important;
+            font-weight: 760 !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"],
+        section[data-testid="stSidebar"] button[aria-label="Help"],
+        section[data-testid="stSidebar"] button[title="Help"] {
+            position: relative !important;
+            width: 18px !important;
+            height: 18px !important;
+            min-width: 18px !important;
+            min-height: 18px !important;
+            border-radius: 999px !important;
+            background: #063F3C !important;
+            border: 1.5px solid #BDF7EF !important;
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08) !important;
+            opacity: 1 !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            overflow: hidden !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"] svg,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] svg,
+        section[data-testid="stSidebar"] button[aria-label="Help"] svg,
+        section[data-testid="stSidebar"] button[title="Help"] svg {
+            display: none !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"]::after,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"]::after,
+        section[data-testid="stSidebar"] button[aria-label="Help"]::after,
+        section[data-testid="stSidebar"] button[title="Help"]::after {
+            content: "?" !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font: 800 12px/1 Arial, sans-serif !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"]:hover,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"]:hover,
+        section[data-testid="stSidebar"] button[aria-label="Help"]:hover,
+        section[data-testid="stSidebar"] button[title="Help"]:hover {
+            background: var(--atlas-teal-bright) !important;
+            border-color: #FFFFFF !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] [data-testid="stTooltipHoverTarget"] {
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            overflow: visible !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] [data-testid="stTooltipHoverTarget"]::after,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] button[aria-label^="Help"]::after {
+            content: none !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] button[aria-label^="Help"] {
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            width: 18px !important;
+            height: 18px !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] button[aria-label^="Help"] svg {
+            display: block !important;
+            width: 13px !important;
+            height: 13px !important;
+            color: #FFFFFF !important;
+            stroke: #FFFFFF !important;
+            fill: none !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"]::after {
+            content: none !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] [data-testid="stTooltipHoverTarget"] {
+            position: absolute !important;
+            inset: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] button[aria-label^="Help"] {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 100% !important;
+            height: 100% !important;
         }
 
         .dashboard-hero {
@@ -1707,8 +784,6 @@ def apply_custom_css() -> None:
         .dashboard-subtitle {
             color: var(--atlas-muted) !important;
             -webkit-text-fill-color: var(--atlas-muted) !important;
-            font-size: 1.0rem !important;
-            font-weight: 500 !important;
             margin-top: 0.8rem !important;
         }
 
@@ -1800,6 +875,13 @@ def apply_custom_css() -> None:
             -webkit-text-fill-color: var(--atlas-muted) !important;
         }
 
+        .stApp section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] *,
+        .stApp section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+        .stApp section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
         [data-testid="stRadio"] > label,
         [data-testid="stRadio"] > label * {
             color: var(--atlas-ink) !important;
@@ -1807,9 +889,7 @@ def apply_custom_css() -> None:
             font-weight: 650 !important;
         }
 
-        [data-testid="stRadio"] [role="radiogroup"] {
-            gap: 1.9rem !important;
-        }
+        [data-testid="stRadio"] [role="radiogroup"] { gap: 1.9rem !important; }
 
         [data-testid="stRadio"] [role="radiogroup"] label {
             background: transparent !important;
@@ -1836,21 +916,21 @@ def apply_custom_css() -> None:
             display: grid;
             grid-template-columns: 58px minmax(0, 1fr);
             align-items: center;
-            gap: 1.0rem;
+            gap: 1rem;
             min-height: 95px;
-            padding: 1.0rem 1.05rem;
+            padding: 1rem 1.05rem;
             background: #FFFFFF;
-            border: 1px solid rgba(15, 23, 42, 0.10);
+            border: 1px solid rgba(15, 23, 42, 0.11);
             border-radius: 9px;
-            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+            box-shadow: 0 3px 13px rgba(15, 23, 42, 0.08);
         }
 
         .atlas-metric-icon {
             width: 55px;
             height: 55px;
             border-radius: 8px;
-            background: #E5F6F3;
-            color: var(--atlas-teal);
+            background: linear-gradient(135deg, #006F6A 0%, var(--atlas-teal-bright) 100%);
+            color: #FFFFFF;
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -1859,7 +939,7 @@ def apply_custom_css() -> None:
         .atlas-metric-icon svg {
             width: 32px;
             height: 32px;
-            stroke: currentColor;
+            stroke: #FFFFFF;
             stroke-width: 2.2;
             fill: none;
             stroke-linecap: round;
@@ -1870,7 +950,7 @@ def apply_custom_css() -> None:
             color: var(--atlas-muted);
             font-size: 0.88rem;
             line-height: 1.2;
-            font-weight: 500;
+            font-weight: 600;
             margin-bottom: 0.35rem;
             white-space: nowrap;
             overflow: hidden;
@@ -1878,27 +958,24 @@ def apply_custom_css() -> None:
         }
 
         .atlas-metric-value {
-            color: #0D1830;
+            color: var(--atlas-ink);
             font-size: 1.85rem;
             line-height: 1;
             font-weight: 400;
             letter-spacing: 0;
         }
 
-        .atlas-table-frame {
-            margin-top: 0.4rem;
-            border: 1px solid rgba(15, 23, 42, 0.10);
-            border-radius: 7px;
-            background: #FFFFFF;
+        .atlas-table-frame,
+        div[data-testid="stDataFrame"] {
+            border: 1px solid rgba(15, 23, 42, 0.10) !important;
+            border-radius: 7px !important;
+            background: #FFFFFF !important;
             overflow: hidden;
-            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08) !important;
         }
 
-        .atlas-table-scroll {
-            width: 100%;
-            overflow: auto;
-            max-height: 560px;
-        }
+        .atlas-table-frame { margin-top: 0.4rem; }
+        .atlas-table-scroll { width: 100%; overflow: auto; max-height: 560px; }
 
         .atlas-preview-table {
             width: 100%;
@@ -1913,7 +990,7 @@ def apply_custom_css() -> None:
             top: 0;
             z-index: 1;
             text-align: left;
-            padding: 0.62rem 1.0rem;
+            padding: 0.62rem 1rem;
             color: #FFFFFF;
             background: linear-gradient(180deg, #006F6A 0%, #005D59 100%);
             border-right: 1px solid rgba(255, 255, 255, 0.20);
@@ -1924,7 +1001,7 @@ def apply_custom_css() -> None:
         }
 
         .atlas-preview-table tbody td {
-            padding: 0.48rem 1.0rem;
+            padding: 0.48rem 1rem;
             border-top: 1px solid #E7EDEF;
             border-right: 1px solid #E7EDEF;
             background: #FFFFFF;
@@ -1934,14 +1011,9 @@ def apply_custom_css() -> None:
             text-overflow: ellipsis;
         }
 
-        .atlas-preview-table tbody tr:nth-child(even) td {
-            background: #FCFDFD;
-        }
-
+        .atlas-preview-table tbody tr:nth-child(even) td { background: #FCFDFD; }
         .atlas-preview-table th:last-child,
-        .atlas-preview-table td:last-child {
-            border-right: 0;
-        }
+        .atlas-preview-table td:last-child { border-right: 0; }
 
         .atlas-table-empty {
             margin-top: 1rem;
@@ -1960,71 +1032,80 @@ def apply_custom_css() -> None:
             box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08) !important;
         }
 
-        div[data-testid="stDataFrame"] {
-            border: 1px solid rgba(15, 23, 42, 0.10) !important;
-            border-radius: 7px !important;
-            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08) !important;
+        [data-baseweb="popover"],
+        [data-baseweb="menu"],
+        [role="listbox"] {
             background: #FFFFFF !important;
+            color: var(--atlas-ink) !important;
         }
 
+        [role="option"],
+        [role="option"] *,
+        [data-baseweb="menu"] * {
+            color: var(--atlas-ink) !important;
+            -webkit-text-fill-color: var(--atlas-ink) !important;
+        }
+
+        div[data-testid="stAlert"],
+        div[data-testid="stAlert"] > div,
+        div[data-testid="stAlert"] [role="alert"] {
+            background: rgba(255, 255, 255, 0.92) !important;
+            border: 1px solid rgba(15, 118, 110, 0.18) !important;
+            color: var(--atlas-ink) !important;
+            border-radius: 9px !important;
+            box-shadow: none !important;
+        }
+
+        .stButton button,
         .stDownloadButton button,
-        .stButton button {
+        div[data-testid="stButton"] button,
+        div[data-testid="stDownloadButton"] button,
+        button[kind="primary"],
+        button[kind="secondary"] {
             border-radius: 8px !important;
-            background: linear-gradient(135deg, #006F6A, #0AAEA6) !important;
+            background: linear-gradient(135deg, #006F6A, var(--atlas-teal-bright)) !important;
             border: 1px solid rgba(0, 107, 104, 0.32) !important;
             box-shadow: none !important;
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            font-weight: 500 !important;
         }
 
-        /* Keep action button labels white but not heavy/bold. */
-        .stDownloadButton button *,
+        .stButton button,
         .stButton button *,
-        .stDownloadButton button p,
-        .stButton button p,
-        .stDownloadButton button span,
-        .stButton button span {
+        .stDownloadButton button,
+        .stDownloadButton button *,
+        div[data-testid="stButton"] button,
+        div[data-testid="stButton"] button *,
+        div[data-testid="stDownloadButton"] button,
+        div[data-testid="stDownloadButton"] button *,
+        button[kind="primary"],
+        button[kind="primary"] *,
+        button[kind="secondary"],
+        button[kind="secondary"] * {
             color: #FFFFFF !important;
             -webkit-text-fill-color: #FFFFFF !important;
+            font-weight: 600 !important;
             opacity: 1 !important;
-            font-weight: 500 !important;
+            text-shadow: none !important;
         }
 
-        /* Sidebar help/question icons: visible, but not plain white dots. */
-        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
-        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"] *,
-        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"],
-        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] *,
-        section[data-testid="stSidebar"] svg[aria-label="Help"],
-        section[data-testid="stSidebar"] svg[title="Help"],
-        section[data-testid="stSidebar"] label + div svg,
-        section[data-testid="stSidebar"] label svg {
-            color: #79DAD2 !important;
-            fill: #79DAD2 !important;
-            stroke: #79DAD2 !important;
-            opacity: 0.95 !important;
-            -webkit-text-fill-color: #79DAD2 !important;
+        .stButton button:hover,
+        .stDownloadButton button:hover,
+        div[data-testid="stButton"] button:hover,
+        div[data-testid="stDownloadButton"] button:hover,
+        button[kind="primary"]:hover,
+        button[kind="secondary"]:hover {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            filter: brightness(1.04);
         }
 
         @media (max-width: 1100px) {
-            .atlas-metric-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
+            .atlas-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
         @media (max-width: 640px) {
-            .atlas-metric-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .dashboard-title {
-                font-size: 2.55rem !important;
-            }
-
-            .dashboard-hero {
-                min-height: 150px !important;
-            }
+            .atlas-metric-grid { grid-template-columns: 1fr; }
+            .dashboard-title { font-size: 2.55rem !important; }
+            .dashboard-hero { min-height: 150px !important; }
         }
         </style>
         <div class="atlas-topbar-brand" aria-hidden="true">
@@ -2032,188 +1113,6 @@ def apply_custom_css() -> None:
             <div class="atlas-logo-mark"></div>
             <div class="atlas-brand-word">AtlasFlow</div>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Final AtlasFlow design-system overrides. Kept last so Streamlit defaults and older CSS blocks cannot override them.
-    st.markdown(
-        """
-        <style>
-        /* Action buttons: white, readable, not overly bold */
-        div.stButton > button,
-        div.stButton > button[kind],
-        div.stButton > button p,
-        div.stButton > button span,
-        div.stButton > button div,
-        div[data-testid="stDownloadButton"] > button,
-        div[data-testid="stDownloadButton"] > button p,
-        div[data-testid="stDownloadButton"] > button span,
-        div[data-testid="stDownloadButton"] > button div,
-        .stDownloadButton button,
-        .stDownloadButton button *,
-        .stButton button,
-        .stButton button * {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            font-weight: 500 !important;
-            opacity: 1 !important;
-            text-shadow: none !important;
-        }
-
-        div.stButton > button:hover,
-        div[data-testid="stDownloadButton"] > button:hover,
-        .stDownloadButton button:hover,
-        .stButton button:hover {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            filter: brightness(1.04);
-        }
-
-        /* Sidebar help icons: visible teal badge, not white dot */
-        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
-        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"],
-        section[data-testid="stSidebar"] label [data-testid="stTooltipHoverTarget"] {
-            background: #0F766E !important;
-            border: 1px solid #8BE8DD !important;
-            border-radius: 999px !important;
-            width: 17px !important;
-            height: 17px !important;
-            min-width: 17px !important;
-            min-height: 17px !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            opacity: 1 !important;
-            box-shadow: 0 0 0 1px rgba(255,255,255,0.16) !important;
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"] svg,
-        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] svg,
-        section[data-testid="stSidebar"] svg[aria-label="Help"],
-        section[data-testid="stSidebar"] svg[title="Help"] {
-            color: #FFFFFF !important;
-            fill: #FFFFFF !important;
-            stroke: #FFFFFF !important;
-            opacity: 1 !important;
-            width: 12px !important;
-            height: 12px !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"]:hover,
-        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"]:hover {
-            background: #14B8A6 !important;
-            border-color: #FFFFFF !important;
-        }
-
-        /* Analytics card visual language */
-        .atlas-metric-card {
-            border: 1px solid rgba(15, 23, 42, 0.11) !important;
-            background: #FFFFFF !important;
-            box-shadow: 0 3px 13px rgba(15, 23, 42, 0.08) !important;
-        }
-
-        .atlas-metric-icon {
-            background: linear-gradient(135deg, #006F6A 0%, #0AAEA6 100%) !important;
-            color: #FFFFFF !important;
-        }
-
-        .atlas-metric-icon svg {
-            color: #FFFFFF !important;
-            stroke: #FFFFFF !important;
-            fill: none !important;
-        }
-
-        .atlas-metric-label {
-            color: #24364F !important;
-            font-weight: 600 !important;
-        }
-
-        .atlas-metric-value {
-            color: #0B1F33 !important;
-            font-weight: 420 !important;
-        }
-
-        /* FINAL override: force all normal action/download button labels to white. */
-        div[data-testid="stButton"] button,
-        div[data-testid="stButton"] button *,
-        div[data-testid="stButton"] button p,
-        div[data-testid="stButton"] button span,
-        div[data-testid="stButton"] button div,
-        div[data-testid="stDownloadButton"] button,
-        div[data-testid="stDownloadButton"] button *,
-        div[data-testid="stDownloadButton"] button p,
-        div[data-testid="stDownloadButton"] button span,
-        div[data-testid="stDownloadButton"] button div,
-        button[kind="primary"],
-        button[kind="primary"] *,
-        button[kind="secondary"],
-        button[kind="secondary"] * {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            text-shadow: none !important;
-            opacity: 1 !important;
-            font-weight: 500 !important;
-        }
-
-        div[data-testid="stButton"] button:hover,
-        div[data-testid="stDownloadButton"] button:hover,
-        button[kind="primary"]:hover,
-        button[kind="secondary"]:hover {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        /* FINAL override: make sidebar help icons explicitly visible as question badges. */
-        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
-        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"],
-        section[data-testid="stSidebar"] button[aria-label="Help"],
-        section[data-testid="stSidebar"] button[title="Help"] {
-            position: relative !important;
-            width: 18px !important;
-            height: 18px !important;
-            min-width: 18px !important;
-            min-height: 18px !important;
-            border-radius: 999px !important;
-            background: #063F3C !important;
-            border: 1.5px solid #BDF7EF !important;
-            box-shadow: 0 0 0 2px rgba(255,255,255,0.08) !important;
-            opacity: 1 !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            overflow: hidden !important;
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"] svg,
-        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] svg,
-        section[data-testid="stSidebar"] button[aria-label="Help"] svg,
-        section[data-testid="stSidebar"] button[title="Help"] svg {
-            display: none !important;
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"]::after,
-        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"]::after,
-        section[data-testid="stSidebar"] button[aria-label="Help"]::after,
-        section[data-testid="stSidebar"] button[title="Help"]::after {
-            content: "?" !important;
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            font-size: 12px !important;
-            font-weight: 800 !important;
-            line-height: 1 !important;
-            font-family: Arial, sans-serif !important;
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"]:hover,
-        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"]:hover,
-        section[data-testid="stSidebar"] button[aria-label="Help"]:hover,
-        section[data-testid="stSidebar"] button[title="Help"]:hover {
-            background: #0AAEA6 !important;
-            border-color: #FFFFFF !important;
-        }
-        </style>
         """,
         unsafe_allow_html=True,
     )
