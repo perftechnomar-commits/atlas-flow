@@ -2134,6 +2134,85 @@ def apply_custom_css() -> None:
             color: #0B1F33 !important;
             font-weight: 420 !important;
         }
+
+        /* FINAL override: force all normal action/download button labels to white. */
+        div[data-testid="stButton"] button,
+        div[data-testid="stButton"] button *,
+        div[data-testid="stButton"] button p,
+        div[data-testid="stButton"] button span,
+        div[data-testid="stButton"] button div,
+        div[data-testid="stDownloadButton"] button,
+        div[data-testid="stDownloadButton"] button *,
+        div[data-testid="stDownloadButton"] button p,
+        div[data-testid="stDownloadButton"] button span,
+        div[data-testid="stDownloadButton"] button div,
+        button[kind="primary"],
+        button[kind="primary"] *,
+        button[kind="secondary"],
+        button[kind="secondary"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            text-shadow: none !important;
+            opacity: 1 !important;
+            font-weight: 500 !important;
+        }
+
+        div[data-testid="stButton"] button:hover,
+        div[data-testid="stDownloadButton"] button:hover,
+        button[kind="primary"]:hover,
+        button[kind="secondary"]:hover {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        /* FINAL override: make sidebar help icons explicitly visible as question badges. */
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"],
+        section[data-testid="stSidebar"] button[aria-label="Help"],
+        section[data-testid="stSidebar"] button[title="Help"] {
+            position: relative !important;
+            width: 18px !important;
+            height: 18px !important;
+            min-width: 18px !important;
+            min-height: 18px !important;
+            border-radius: 999px !important;
+            background: #063F3C !important;
+            border: 1.5px solid #BDF7EF !important;
+            box-shadow: 0 0 0 2px rgba(255,255,255,0.08) !important;
+            opacity: 1 !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            overflow: hidden !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"] svg,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] svg,
+        section[data-testid="stSidebar"] button[aria-label="Help"] svg,
+        section[data-testid="stSidebar"] button[title="Help"] svg {
+            display: none !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"]::after,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"]::after,
+        section[data-testid="stSidebar"] button[aria-label="Help"]::after,
+        section[data-testid="stSidebar"] button[title="Help"]::after {
+            content: "?" !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font-size: 12px !important;
+            font-weight: 800 !important;
+            line-height: 1 !important;
+            font-family: Arial, sans-serif !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"]:hover,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"]:hover,
+        section[data-testid="stSidebar"] button[aria-label="Help"]:hover,
+        section[data-testid="stSidebar"] button[title="Help"]:hover {
+            background: #0AAEA6 !important;
+            border-color: #FFFFFF !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
