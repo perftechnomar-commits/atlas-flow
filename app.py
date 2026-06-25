@@ -1975,10 +1975,10 @@ def apply_custom_css() -> None:
             box-shadow: none !important;
             color: #FFFFFF !important;
             -webkit-text-fill-color: #FFFFFF !important;
-            font-weight: 800 !important;
+            font-weight: 500 !important;
         }
 
-        /* Keep button labels bright and readable, including the Prepare displayed table Excel button. */
+        /* Keep action button labels white but not heavy/bold. */
         .stDownloadButton button *,
         .stButton button *,
         .stDownloadButton button p,
@@ -1988,10 +1988,10 @@ def apply_custom_css() -> None:
             color: #FFFFFF !important;
             -webkit-text-fill-color: #FFFFFF !important;
             opacity: 1 !important;
-            font-weight: 850 !important;
+            font-weight: 500 !important;
         }
 
-        /* Make sidebar help/question icons clearly visible on the dark teal sidebar. */
+        /* Sidebar help/question icons: visible, but not plain white dots. */
         section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
         section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"] *,
         section[data-testid="stSidebar"] [data-testid="stTooltipIcon"],
@@ -2000,11 +2000,11 @@ def apply_custom_css() -> None:
         section[data-testid="stSidebar"] svg[title="Help"],
         section[data-testid="stSidebar"] label + div svg,
         section[data-testid="stSidebar"] label svg {
-            color: #FFFFFF !important;
-            fill: #FFFFFF !important;
-            stroke: #FFFFFF !important;
-            opacity: 1 !important;
-            -webkit-text-fill-color: #FFFFFF !important;
+            color: #79DAD2 !important;
+            fill: #79DAD2 !important;
+            stroke: #79DAD2 !important;
+            opacity: 0.95 !important;
+            -webkit-text-fill-color: #79DAD2 !important;
         }
 
         @media (max-width: 1100px) {
