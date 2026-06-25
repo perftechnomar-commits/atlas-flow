@@ -2036,6 +2036,109 @@ def apply_custom_css() -> None:
         unsafe_allow_html=True,
     )
 
+    # Final AtlasFlow design-system overrides. Kept last so Streamlit defaults and older CSS blocks cannot override them.
+    st.markdown(
+        """
+        <style>
+        /* Action buttons: white, readable, not overly bold */
+        div.stButton > button,
+        div.stButton > button[kind],
+        div.stButton > button p,
+        div.stButton > button span,
+        div.stButton > button div,
+        div[data-testid="stDownloadButton"] > button,
+        div[data-testid="stDownloadButton"] > button p,
+        div[data-testid="stDownloadButton"] > button span,
+        div[data-testid="stDownloadButton"] > button div,
+        .stDownloadButton button,
+        .stDownloadButton button *,
+        .stButton button,
+        .stButton button * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font-weight: 500 !important;
+            opacity: 1 !important;
+            text-shadow: none !important;
+        }
+
+        div.stButton > button:hover,
+        div[data-testid="stDownloadButton"] > button:hover,
+        .stDownloadButton button:hover,
+        .stButton button:hover {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            filter: brightness(1.04);
+        }
+
+        /* Sidebar help icons: visible teal badge, not white dot */
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"],
+        section[data-testid="stSidebar"] label [data-testid="stTooltipHoverTarget"] {
+            background: #0F766E !important;
+            border: 1px solid #8BE8DD !important;
+            border-radius: 999px !important;
+            width: 17px !important;
+            height: 17px !important;
+            min-width: 17px !important;
+            min-height: 17px !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            opacity: 1 !important;
+            box-shadow: 0 0 0 1px rgba(255,255,255,0.16) !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"] svg,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] svg,
+        section[data-testid="stSidebar"] svg[aria-label="Help"],
+        section[data-testid="stSidebar"] svg[title="Help"] {
+            color: #FFFFFF !important;
+            fill: #FFFFFF !important;
+            stroke: #FFFFFF !important;
+            opacity: 1 !important;
+            width: 12px !important;
+            height: 12px !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"]:hover,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"]:hover {
+            background: #14B8A6 !important;
+            border-color: #FFFFFF !important;
+        }
+
+        /* Analytics card visual language */
+        .atlas-metric-card {
+            border: 1px solid rgba(15, 23, 42, 0.11) !important;
+            background: #FFFFFF !important;
+            box-shadow: 0 3px 13px rgba(15, 23, 42, 0.08) !important;
+        }
+
+        .atlas-metric-icon {
+            background: linear-gradient(135deg, #006F6A 0%, #0AAEA6 100%) !important;
+            color: #FFFFFF !important;
+        }
+
+        .atlas-metric-icon svg {
+            color: #FFFFFF !important;
+            stroke: #FFFFFF !important;
+            fill: none !important;
+        }
+
+        .atlas-metric-label {
+            color: #24364F !important;
+            font-weight: 600 !important;
+        }
+
+        .atlas-metric-value {
+            color: #0B1F33 !important;
+            font-weight: 420 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def render_header(selected_group: str, selected_vessels: list[str], selected_variables: list[str]) -> None:
     vessel_text = "All selected vessels" if len(selected_vessels) != 1 else selected_vessels[0]
@@ -3019,12 +3122,20 @@ def format_display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 METRIC_ICON_SVGS = {
+    "table_eye": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="1.8"></rect><path d="M3 10h18M8 5v14M16 5v14"></path><path d="M8.4 12.3c1.1-1.3 2.3-1.9 3.6-1.9s2.5.6 3.6 1.9c-1.1 1.3-2.3 1.9-3.6 1.9s-2.5-.6-3.6-1.9Z"></path><circle cx="12" cy="12.3" r="1.1"></circle></svg>',
+    "checked_columns": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 4v16M15 4v16M7.2 12.2l1.9 1.9 3.8-4.4"></path></svg>',
+    "database_rows": '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path><path d="M8 9h8M8 15h8"></path></svg>',
+    "columns_plus": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="13" height="16" rx="2"></rect><path d="M7.3 4v16M11.7 4v16M18 9v8M14 13h8"></path></svg>',
+    "average": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"></path><path d="M7 17V9M12 17V6M17 17v-5"></path><path d="M4 12h16"></path></svg>',
+    "total": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5H7l6 7-6 7h10.5"></path></svg>',
+    "numeric": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3v8M4 16h6M13 8h4l-4 8h4M20 8v8"></path></svg>',
+    "missing": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="3 2"></rect><path d="M10 9.5a2.2 2.2 0 1 1 3.3 1.9c-.8.5-1.3 1-1.3 2.1"></path><path d="M12 17h.01"></path></svg>',
+    # Backwards-compatible names used by older cards.
     "table": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="1.8"></rect><path d="M3 9h18M3 15h18M9 3v18M15 3v18"></path></svg>',
     "list": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h9"></path><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"></path></svg>',
     "database": '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg>',
     "nodes": '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4" r="2.5"></circle><circle cx="5" cy="19" r="2.5"></circle><circle cx="19" cy="19" r="2.5"></circle><path d="M10.8 6.2 6.2 16.8M13.2 6.2l4.6 10.6M7.5 19h9"></path></svg>',
 }
-
 
 def render_metric_cards(cards: list[tuple[str, str, str]]) -> None:
     card_html = []
@@ -3473,10 +3584,10 @@ def render_descriptive_statistics_tab(
     values = pd.to_numeric(analysis_df[metric_column], errors="coerce")
     render_metric_cards(
         [
-            ("Numeric values", f"{values.notna().sum():,}", "table"),
-            ("Total", f"{values.sum(skipna=True):,.3f}", "database"),
-            ("Average", f"{values.mean(skipna=True):,.3f}", "nodes"),
-            ("Missing", f"{values.isna().sum():,}", "list"),
+            ("Numeric Values", f"{values.notna().sum():,}", "numeric"),
+            ("Total", f"{values.sum(skipna=True):,.3f}", "total"),
+            ("Average", f"{values.mean(skipna=True):,.3f}", "average"),
+            ("Missing", f"{values.isna().sum():,}", "missing"),
         ]
     )
 
@@ -4306,12 +4417,12 @@ def main() -> None:
     output_df = filtered_pivot_df[display_columns].copy()
 
     tab_table, tab_reportpivots, tab_shippivots, tab_descriptive, tab_export, tab_diagnostics = st.tabs([
-        "Custom Analytics",
-        "Noon & Manual Reports",
-        "15-Minute Operations",
-        "Descriptive Statistics",
-        "Export Center",
-        "API Diagnostics",
+        "📊 Custom Analytics",
+        "📄 Noon & Manual Reports",
+        "⏱️ 15-Minute Operations",
+        "📈 Descriptive Statistics",
+        "📦 Export Center",
+        "🔍 API Diagnostics",
     ])
 
     if metadata.get("hit_page_limit"):
@@ -4417,10 +4528,10 @@ def main() -> None:
 
         render_metric_cards(
             [
-                ("Displayed rows", f"{len(displayed_table_df):,}", "table"),
-                ("Selected variables", f"{len(selected_variables):,}", "list"),
-                ("Source long rows", f"{len(filtered_long_for_options):,}", "database"),
-                ("Available variables", f"{len(variable_options):,}", "nodes"),
+                ("Displayed Rows", f"{len(displayed_table_df):,}", "table_eye"),
+                ("Selected Variables", f"{len(selected_variables):,}", "checked_columns"),
+                ("Source Rows", f"{len(filtered_long_for_options):,}", "database_rows"),
+                ("Available Variables", f"{len(variable_options):,}", "columns_plus"),
             ]
         )
 
