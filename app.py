@@ -1978,6 +1978,35 @@ def apply_custom_css() -> None:
             font-weight: 800 !important;
         }
 
+        /* Keep button labels bright and readable, including the Prepare displayed table Excel button. */
+        .stDownloadButton button *,
+        .stButton button *,
+        .stDownloadButton button p,
+        .stButton button p,
+        .stDownloadButton button span,
+        .stButton button span {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            opacity: 1 !important;
+            font-weight: 850 !important;
+        }
+
+        /* Make sidebar help/question icons clearly visible on the dark teal sidebar. */
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
+        section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"] *,
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"],
+        section[data-testid="stSidebar"] [data-testid="stTooltipIcon"] *,
+        section[data-testid="stSidebar"] svg[aria-label="Help"],
+        section[data-testid="stSidebar"] svg[title="Help"],
+        section[data-testid="stSidebar"] label + div svg,
+        section[data-testid="stSidebar"] label svg {
+            color: #FFFFFF !important;
+            fill: #FFFFFF !important;
+            stroke: #FFFFFF !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
         @media (max-width: 1100px) {
             .atlas-metric-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
