@@ -21,6 +21,7 @@ import streamlit as st
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 
 # =============================================================================
@@ -2201,13 +2202,40 @@ def add_excel_table(worksheet: Any, table_name: str) -> None:
     table_ref = f"A1:{get_column_letter(worksheet.max_column)}{worksheet.max_row}"
     table = Table(displayName=table_name, ref=table_ref)
     table.tableStyleInfo = TableStyleInfo(
-        name="TableStyleMedium5",
+        # Built-in table style kept neutral; explicit teal formatting below
+        # gives the export a stable AtlasFlow look in Excel.
+        name="TableStyleMedium2",
         showFirstColumn=False,
         showLastColumn=False,
         showRowStripes=True,
         showColumnStripes=False,
     )
     worksheet.add_table(table)
+
+
+def apply_teal_excel_table_format(worksheet: Any) -> None:
+    """Apply AtlasFlow teal styling to exported Excel tables."""
+    if worksheet.max_row < 1 or worksheet.max_column < 1:
+        return
+
+    header_fill = PatternFill(fill_type="solid", fgColor="006B68")
+    even_fill = PatternFill(fill_type="solid", fgColor="EAF7F5")
+    odd_fill = PatternFill(fill_type="solid", fgColor="FFFFFF")
+    border_side = Side(style="thin", color="B7DCD8")
+    cell_border = Border(left=border_side, right=border_side, top=border_side, bottom=border_side)
+
+    for cell in worksheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = cell_border
+
+    for row_number in range(2, worksheet.max_row + 1):
+        fill = even_fill if row_number % 2 == 0 else odd_fill
+        for cell in worksheet[row_number]:
+            cell.fill = fill
+            cell.border = cell_border
+            cell.alignment = Alignment(vertical="center", wrap_text=False)
 
 
 def autofit_excel_columns(worksheet: Any, max_width: int = 48) -> None:
@@ -2223,6 +2251,7 @@ def write_table_sheet(writer: Any, df: pd.DataFrame, sheet_name: str, table_name
     worksheet.freeze_panes = "A2"
     autofit_excel_columns(worksheet)
     add_excel_table(worksheet, table_name)
+    apply_teal_excel_table_format(worksheet)
 
 
 def to_excel_bytes(clean_df: pd.DataFrame, pivot_analysis_df: pd.DataFrame | None = None) -> bytes:
