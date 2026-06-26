@@ -763,20 +763,21 @@ def apply_custom_css() -> None:
         .eyebrow {
             color: var(--atlas-teal) !important;
             -webkit-text-fill-color: var(--atlas-teal) !important;
-            font-size: 0.74rem !important;
-            font-weight: 850 !important;
-            letter-spacing: 0.22em !important;
-            margin-bottom: 0.95rem !important;
+            font-size: 0.75rem !important;
+            font-weight: 750 !important;
+            letter-spacing: 0.14em !important;
+            text-transform: uppercase !important;
+            margin-bottom: 0.82rem !important;
         }
 
         .dashboard-title {
             color: var(--atlas-ink) !important;
             -webkit-text-fill-color: var(--atlas-ink) !important;
-            font-family: "Segoe UI Light", "Aptos Display", "Segoe UI", sans-serif !important;
-            font-size: clamp(3.15rem, 4vw, 4.05rem) !important;
-            font-weight: 300 !important;
+            font-family: "Segoe UI", "Inter", "Aptos Display", sans-serif !important;
+            font-size: clamp(2.9rem, 3.6vw, 3.7rem) !important;
+            font-weight: 400 !important;
             letter-spacing: 0 !important;
-            line-height: 1.02 !important;
+            line-height: 1.04 !important;
             margin: 0 !important;
             padding: 0 !important;
         }
@@ -784,7 +785,9 @@ def apply_custom_css() -> None:
         .dashboard-subtitle {
             color: var(--atlas-muted) !important;
             -webkit-text-fill-color: var(--atlas-muted) !important;
-            margin-top: 0.8rem !important;
+            font-size: 0.96rem !important;
+            font-weight: 500 !important;
+            margin-top: 0.75rem !important;
         }
 
         .api-load-caption,
@@ -1653,11 +1656,14 @@ def render_wide_source_tab(source_label: str, df: pd.DataFrame, metadata: dict[s
         return pd.DataFrame()
 
     filtered_df = filter_wide_source_data(df, source_key, selected_vessels, selected_start, selected_end)
-    cols = st.columns(4)
-    cols[0].metric("Rows", f"{len(filtered_df):,}")
-    cols[1].metric("Columns", f"{len(filtered_df.columns):,}")
-    cols[2].metric("API rows", f"{metadata.get('rows', len(df)):,}")
-    cols[3].metric("API pages", f"{metadata.get('pages', 0):,}")
+    render_metric_cards(
+        [
+            ("Rows", f"{len(filtered_df):,}", "table_eye"),
+            ("Columns", f"{len(filtered_df.columns):,}", "checked_columns"),
+            ("API Rows", f"{metadata.get('rows', len(df)):,}", "database_rows"),
+            ("API Pages", f"{metadata.get('pages', 0):,}", "numeric"),
+        ]
+    )
 
     default_columns = [c for c in ["ShipName", "DateTime", "State", "StateName", "GPSSpeed", "LogSpeed", "MEConsumed", "ShaftPower"] if c in filtered_df.columns]
     if not default_columns:
@@ -3395,12 +3401,12 @@ def main() -> None:
     output_df = filtered_pivot_df[display_columns].copy()
 
     tab_table, tab_reportpivots, tab_shippivots, tab_descriptive, tab_export, tab_diagnostics = st.tabs([
-        "📊 Custom Analytics",
-        "📄 Noon & Manual Reports",
-        "⏱️ 15-Minute Operations",
-        "📈 Descriptive Statistics",
-        "📦 Export Center",
-        "🔍 API Diagnostics",
+        "Custom Analytics",
+        "Noon & Manual Reports",
+        "15-Minute Operations",
+        "Descriptive Statistics",
+        "Export Center",
+        "API Diagnostics",
     ])
 
     if metadata.get("hit_page_limit"):
@@ -3594,10 +3600,13 @@ def main() -> None:
     with tab_export:
         st.markdown('<div class="section-title">AtlasFlow Export Center</div>', unsafe_allow_html=True)
         st.caption("Prepare a single workbook with Custom Analytics, Noon & Manual Reports, and 15-Minute Operations sheets from the current fleet/period selections.")
-        export_cols = st.columns(3)
-        export_cols[0].metric("Custom Analytics rows", f"{len(output_df):,}")
-        export_cols[1].metric("Noon & Manual Reports rows", f"{len(reportpivots_output_df):,}")
-        export_cols[2].metric("15-Minute Operations rows", f"{len(shippivots_output_df):,}")
+        render_metric_cards(
+            [
+                ("Custom Analytics Rows", f"{len(output_df):,}", "table_eye"),
+                ("Noon & Manual Rows", f"{len(reportpivots_output_df):,}", "database_rows"),
+                ("15-Minute Rows", f"{len(shippivots_output_df):,}", "checked_columns"),
+            ]
+        )
 
         multisource_signature_payload = "|".join([
             current_export_signature,
