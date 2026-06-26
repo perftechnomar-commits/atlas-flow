@@ -1677,7 +1677,7 @@ def render_wide_source_tab(source_label: str, df: pd.DataFrame, metadata: dict[s
     if not selected_columns:
         selected_columns = default_columns
     output = filtered_df[selected_columns].copy() if selected_columns else filtered_df.copy()
-    st.dataframe(format_display_dataframe(output.head(TABLE_PREVIEW_ROW_LIMIT)), use_container_width=True, hide_index=True)
+    render_preview_table(output)
     if len(output) > TABLE_PREVIEW_ROW_LIMIT:
         st.caption(f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of {len(output):,} rows. Export includes all filtered rows/columns selected above.")
     return output
