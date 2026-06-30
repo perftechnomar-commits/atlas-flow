@@ -3225,19 +3225,28 @@ def run_warmup_if_requested() -> None:
         st.error("Invalid warmup source. Use reportdata, reportpivots, or shippivots.")
         st.stop()
 
-    if get_query_param("force", "0") == "1":
-        cached_fetch_report_data.clear()
-        cached_fetch_wide_odata_source.clear()
-        cached_prepare_long_data.clear()
-        build_pivot_table.clear()
+    force_refresh = get_query_param("force", "0") == "1"
 
+    # Do not clear active Streamlit caches before the new API pull succeeds.
+    # The snapshot writers already use unique temporary parquet files and only
+    # replace the previous good snapshot after the fresh fetch has completed.
+    # Clearing cached data after success avoids an empty/slow window for users
+    # who are actively browsing while Task Scheduler is warming up ReportData.
     try:
         with st.spinner(f"Warming up AtlasFlow source: {requested_source}..."):
             if requested_source == "reportdata":
                 metadata = fetch_report_data_to_snapshot(username, password, token, auth_method, start_date)
             else:
                 metadata = fetch_wide_source_to_snapshot(requested_source, username, password, token, auth_method, start_date)
-            gc.collect()
+
+            if force_refresh:
+                if requested_source == "reportdata":
+                    cached_fetch_report_data.clear()
+                    cached_prepare_long_data.clear()
+                    build_pivot_table.clear()
+                else:
+                    cached_fetch_wide_odata_source.clear()
+                gc.collect()
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
         st.error(f"Warmup failed: Marorka API request failed with status {status}.")
@@ -3256,7 +3265,7 @@ def run_warmup_if_requested() -> None:
             "downloaded_mb": metadata.get("downloaded_mb", "-"),
             "fetch_seconds": metadata.get("fetch_seconds", "-"),
             "snapshot_format": "parquet",
-            "force_refresh": get_query_param("force", "0") == "1",
+            "force_refresh": force_refresh,
         }
     )
     st.stop()
