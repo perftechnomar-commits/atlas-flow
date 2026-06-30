@@ -373,7 +373,7 @@ DERIVED_VARIABLES = [
 
 VESSEL_GROUPS = {
     "Fleet 1": ["ATETI", "CMA CGM THALASSA", "CZECH", "DOLPHIN II", "GSL CHRISTEL ELISABETH", "GSL VINIA", "ORCA I", "MYNY", "SYDNEY EXPRESS"],
-    "Fleet 2": ["AGIOS DIMITRIOS", "CONSTANTINOS P II", "ELENI T", "MAIRA", "MELINA", "NEWYORKER", "NIKOLAS", "TORRANCE"],
+    "Fleet 2": ["AGIOS DIMITRIOS", "ELENI T", "MAIRA", "MELINA", "NEWYORKER", "NIKOLAS", "TORRANCE"],
     "Fleet 3": ["BREMERHAVEN EXPRESS", "CMA CGM ALCAZAR", "GSL ALICE", "GSL CHATEAU D'IF", "GSL ELEFTHERIA", "GSL MAREN", "GSL MELINA", "ISTANBUL EXPRESS"],
     "Fleet 4": ["ANTHEA Y", "COLOMBIA EXPRESS", "COSTA RICA EXPRESS", "JAMAICA EXPRESS", "MEXICO EXPRESS", "NICARAGUA EXPRESS", "PANAMA EXPRESS", "ZIM NORFOLK", "ZIM XIAMEN"],
     "Fleet 9": ["CMA CGM AMERICA", "CMA CGM SAMBHAR", "GSL ELENI", "GSL GRANIA", "GSL KALLIOPI", "GSL NINGBO", "MSC QINGDAO", "MSC TIANJIN"],
@@ -2957,7 +2957,12 @@ def fetch_report_data_to_snapshot(
     total_bytes = 0
     scanned_rows = 0
     kept_rows_total = 0
-    tmp_file = RAW_SNAPSHOT_FILE.with_suffix(".tmp.parquet")
+    # Use a unique temporary file per warmup request. Streamlit Cloud can run
+    # multiple warmup/browser sessions at the same time; a fixed .tmp.parquet
+    # name can be deleted by another session before this request reaches replace().
+    tmp_file = RAW_SNAPSHOT_FILE.with_name(
+        f"{RAW_SNAPSHOT_FILE.stem}.{os.getpid()}.{int(time.time() * 1000)}.tmp.parquet"
+    )
     tmp_file.parent.mkdir(parents=True, exist_ok=True)
     if tmp_file.exists():
         tmp_file.unlink()
@@ -3061,7 +3066,12 @@ def fetch_wide_source_to_snapshot(
     total_bytes = 0
     row_count = 0
     all_columns: list[str] = []
-    tmp_file = Path(config["snapshot_file"]).with_suffix(".tmp.parquet")
+    target_file = Path(config["snapshot_file"])
+    # Use a unique temporary file per warmup request to avoid cross-session
+    # collisions when several source warmups or browser tabs run concurrently.
+    tmp_file = target_file.with_name(
+        f"{target_file.stem}.{os.getpid()}.{int(time.time() * 1000)}.tmp.parquet"
+    )
     tmp_file.parent.mkdir(parents=True, exist_ok=True)
     if tmp_file.exists():
         tmp_file.unlink()
@@ -3127,7 +3137,6 @@ def fetch_wide_source_to_snapshot(
         if writer is not None:
             writer.close()
 
-    target_file = Path(config["snapshot_file"])
     target_file.parent.mkdir(parents=True, exist_ok=True)
 
     if row_count == 0:
