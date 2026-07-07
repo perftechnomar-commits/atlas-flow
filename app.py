@@ -1264,6 +1264,47 @@ def request_headers(token: str, auth_method: str) -> dict[str, str]:
     return headers
 
 
+
+
+RETRYABLE_HTTP_STATUSES = {500, 502, 503, 504}
+RETRYABLE_REQUEST_EXCEPTIONS = (
+    requests.ConnectionError,
+    requests.ReadTimeout,
+    requests.Timeout,
+    requests.ChunkedEncodingError,
+)
+
+
+def request_with_retry(
+    session: requests.Session,
+    url: str,
+    *,
+    auth: Any,
+    timeout: int = 90,
+    max_attempts: int = 5,
+    base_sleep_seconds: float = 2.0,
+) -> requests.Response:
+    """GET an OData page with retry/backoff for transient Marorka disconnects."""
+    last_error: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = session.get(url, auth=auth, timeout=timeout)
+            if response.status_code in RETRYABLE_HTTP_STATUSES and attempt < max_attempts:
+                time.sleep(base_sleep_seconds * (2 ** (attempt - 1)))
+                continue
+            return response
+        except RETRYABLE_REQUEST_EXCEPTIONS as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                raise
+            time.sleep(base_sleep_seconds * (2 ** (attempt - 1)))
+
+    if last_error is not None:
+        raise last_error
+    raise requests.RequestException("Marorka API request failed before a response was received.")
+
+
 def odata_quote(value: str) -> str:
     return str(value).replace("'", "''")
 
@@ -1361,7 +1402,7 @@ def fetch_report_data(
                 break
             seen_urls.add(next_url)
 
-            response = session.get(next_url, auth=auth, timeout=90)
+            response = request_with_retry(session, next_url, auth=auth, timeout=90)
             total_bytes += len(response.content)
             response.raise_for_status()
             pages += 1
@@ -1440,7 +1481,7 @@ def fetch_wide_odata_source(
             if next_url in seen_urls:
                 break
             seen_urls.add(next_url)
-            response = session.get(next_url, auth=auth, timeout=90)
+            response = request_with_retry(session, next_url, auth=auth, timeout=90)
             total_bytes += len(response.content)
             response.raise_for_status()
             pages += 1
@@ -2979,7 +3020,7 @@ def fetch_report_data_to_snapshot(
                     break
                 seen_urls.add(next_url)
 
-                response = session.get(next_url, auth=auth, timeout=90)
+                response = request_with_retry(session, next_url, auth=auth, timeout=90)
                 total_bytes += len(response.content)
                 response.raise_for_status()
                 pages += 1
@@ -3088,7 +3129,7 @@ def fetch_wide_source_to_snapshot(
                 if next_url in seen_urls:
                     break
                 seen_urls.add(next_url)
-                response = session.get(next_url, auth=auth, timeout=90)
+                response = request_with_retry(session, next_url, auth=auth, timeout=90)
                 total_bytes += len(response.content)
                 response.raise_for_status()
                 pages += 1
