@@ -1271,7 +1271,7 @@ RETRYABLE_REQUEST_EXCEPTIONS = (
     requests.ConnectionError,
     requests.ReadTimeout,
     requests.Timeout,
-    requests.ChunkedEncodingError,
+    requests.exceptions.ChunkedEncodingError,
 )
 
 
