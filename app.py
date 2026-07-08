@@ -894,20 +894,73 @@ def apply_custom_css() -> None:
             font-weight: 650 !important;
         }
 
-        [data-testid="stRadio"] [role="radiogroup"] { gap: 1.9rem !important; }
+        /* AtlasFlow top navigation: keep the lazy-loaded radio logic, but make it
+           look like the original clean tab strip instead of circular radio pills. */
+        [data-testid="stRadio"] [role="radiogroup"] {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            align-items: flex-end !important;
+            gap: 1.35rem !important;
+            border-bottom: 1px solid var(--atlas-line) !important;
+            padding: 0 0 0.05rem 0 !important;
+            margin: 0.35rem 0 1rem 0 !important;
+        }
 
         [data-testid="stRadio"] [role="radiogroup"] label {
+            position: relative !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            min-height: 42px !important;
+            padding: 0 0.45rem 0.58rem 0.45rem !important;
+            margin: 0 !important;
             background: transparent !important;
             border: 0 !important;
+            border-radius: 0 !important;
             box-shadow: none !important;
-            padding: 0 !important;
+            cursor: pointer !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label > div:first-child,
+        [data-testid="stRadio"] [role="radiogroup"] label [data-testid="stMarkdownContainer"] + div,
+        [data-testid="stRadio"] [role="radiogroup"] label svg {
+            display: none !important;
         }
 
         [data-testid="stRadio"] [role="radiogroup"] label *,
         [data-testid="stRadio"] [role="radiogroup"] p {
-            color: var(--atlas-ink) !important;
-            -webkit-text-fill-color: var(--atlas-ink) !important;
+            color: #334155 !important;
+            -webkit-text-fill-color: #334155 !important;
+            font-size: 0.94rem !important;
             font-weight: 500 !important;
+            letter-spacing: 0 !important;
+            line-height: 1.15 !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label:hover *,
+        [data-testid="stRadio"] [role="radiogroup"] label:hover p {
+            color: var(--atlas-teal) !important;
+            -webkit-text-fill-color: var(--atlas-teal) !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked)::after,
+        [data-testid="stRadio"] [role="radiogroup"] label[aria-checked="true"]::after {
+            content: "" !important;
+            position: absolute !important;
+            left: 0.25rem !important;
+            right: 0.25rem !important;
+            bottom: -0.05rem !important;
+            height: 2px !important;
+            border-radius: 999px !important;
+            background: var(--atlas-teal) !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) *,
+        [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) p,
+        [data-testid="stRadio"] [role="radiogroup"] label[aria-checked="true"] *,
+        [data-testid="stRadio"] [role="radiogroup"] label[aria-checked="true"] p {
+            color: var(--atlas-teal) !important;
+            -webkit-text-fill-color: var(--atlas-teal) !important;
+            font-weight: 700 !important;
         }
 
         .atlas-metric-grid {
