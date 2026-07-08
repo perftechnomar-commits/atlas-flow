@@ -887,101 +887,59 @@ def apply_custom_css() -> None:
             -webkit-text-fill-color: #FFFFFF !important;
         }
 
-        [data-testid="stRadio"] > label,
-        [data-testid="stRadio"] > label * {
-            color: var(--atlas-ink) !important;
-            -webkit-text-fill-color: var(--atlas-ink) !important;
-            font-weight: 650 !important;
+        .atlas-tabbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-end;
+            gap: 1.35rem;
+            border-bottom: 1px solid var(--atlas-line);
+            padding: 0 0 0.05rem 0;
+            margin: 0.35rem 0 1rem 0;
         }
 
-        /* AtlasFlow top navigation: keep the lazy-loaded radio logic, but make it
-           look like the original clean tab strip instead of circular radio pills. */
-        [data-testid="stRadio"] [role="radiogroup"] {
-            display: flex !important;
-            flex-wrap: wrap !important;
-            align-items: flex-end !important;
-            gap: 1.35rem !important;
-            border-bottom: 1px solid var(--atlas-line) !important;
-            padding: 0 0 0.05rem 0 !important;
-            margin: 0.35rem 0 1rem 0 !important;
+        .atlas-tabbar.compact {
+            gap: 1.65rem;
+            margin-top: 0.2rem;
+            margin-bottom: 1.1rem;
         }
 
-        [data-testid="stRadio"] [role="radiogroup"] label {
-            position: relative !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            min-height: 42px !important;
-            padding: 0 0.45rem 0.58rem 0.45rem !important;
-            margin: 0 !important;
-            background: transparent !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            box-shadow: none !important;
-            cursor: pointer !important;
-        }
-
-        /* Hide every native radio indicator/circle and keep only clickable text.
-           Streamlit/BaseWeb changes the exact DOM across versions, so this uses
-           several safe selectors for the indicator while preserving markdown text. */
-        [data-testid="stRadio"] [role="radiogroup"] input[type="radio"],
-        [data-testid="stRadio"] [role="radiogroup"] label::before,
-        [data-testid="stRadio"] [role="radiogroup"] label > div:first-child:not([data-testid="stMarkdownContainer"]),
-        [data-testid="stRadio"] [role="radiogroup"] label > div:nth-child(2):not([data-testid="stMarkdownContainer"]),
-        [data-testid="stRadio"] [role="radiogroup"] label [data-baseweb="radio"],
-        [data-testid="stRadio"] [role="radiogroup"] label [data-baseweb="radio"] *,
-        [data-testid="stRadio"] [role="radiogroup"] label [data-testid="stMarkdownContainer"] + div,
-        [data-testid="stRadio"] [role="radiogroup"] label svg {
-            display: none !important;
-            width: 0 !important;
-            min-width: 0 !important;
-            height: 0 !important;
-            min-height: 0 !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            opacity: 0 !important;
-            pointer-events: none !important;
-        }
-
-        [data-testid="stRadio"] [role="radiogroup"] label [data-testid="stMarkdownContainer"] {
-            margin-left: 0 !important;
-            padding-left: 0 !important;
-        }
-
-        [data-testid="stRadio"] [role="radiogroup"] label *,
-        [data-testid="stRadio"] [role="radiogroup"] p {
+        .atlas-tablink {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            min-height: 42px;
+            padding: 0 0.45rem 0.58rem 0.45rem;
             color: #334155 !important;
             -webkit-text-fill-color: #334155 !important;
             font-size: 0.94rem !important;
             font-weight: 500 !important;
-            letter-spacing: 0 !important;
             line-height: 1.15 !important;
+            text-decoration: none !important;
+            border: 0 !important;
+            background: transparent !important;
         }
 
-        [data-testid="stRadio"] [role="radiogroup"] label:hover *,
-        [data-testid="stRadio"] [role="radiogroup"] label:hover p {
+        .atlas-tablink:hover {
             color: var(--atlas-teal) !important;
             -webkit-text-fill-color: var(--atlas-teal) !important;
+            text-decoration: none !important;
         }
 
-        [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked)::after,
-        [data-testid="stRadio"] [role="radiogroup"] label[aria-checked="true"]::after {
-            content: "" !important;
-            position: absolute !important;
-            left: 0.25rem !important;
-            right: 0.25rem !important;
-            bottom: -0.05rem !important;
-            height: 2px !important;
-            border-radius: 999px !important;
-            background: var(--atlas-teal) !important;
-        }
-
-        [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) *,
-        [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) p,
-        [data-testid="stRadio"] [role="radiogroup"] label[aria-checked="true"] *,
-        [data-testid="stRadio"] [role="radiogroup"] label[aria-checked="true"] p {
+        .atlas-tablink.active {
             color: var(--atlas-teal) !important;
             -webkit-text-fill-color: var(--atlas-teal) !important;
             font-weight: 700 !important;
+        }
+
+        .atlas-tablink.active::after {
+            content: "";
+            position: absolute;
+            left: 0.25rem;
+            right: 0.25rem;
+            bottom: -0.05rem;
+            height: 2px;
+            border-radius: 999px;
+            background: var(--atlas-teal);
         }
 
         .atlas-metric-grid {
@@ -1232,6 +1190,57 @@ def render_api_load_caption(metadata: dict[str, Any] | None) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def slugify_tab_label(label: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(label).lower()).strip("-") or "tab"
+
+
+def current_query_params_dict() -> dict[str, str]:
+    try:
+        items = st.query_params.to_dict()
+    except Exception:
+        try:
+            raw_items = st.experimental_get_query_params()
+            items = {key: str(value[0]) if isinstance(value, list) and value else str(value) for key, value in raw_items.items()}
+        except Exception:
+            items = {}
+    return {str(key): str(value) for key, value in items.items()}
+
+
+def get_tab_selection(param_name: str, options: list[str], default: str) -> str:
+    slug_to_option = {slugify_tab_label(option): option for option in options}
+    raw_value = get_query_param(param_name, slugify_tab_label(default)).strip().lower()
+    if raw_value in slug_to_option:
+        return slug_to_option[raw_value]
+    if raw_value in options:
+        return raw_value
+    return default if default in options else options[0]
+
+
+def render_text_tab_bar(
+    options: list[str],
+    selected: str,
+    *,
+    param_name: str,
+    css_class: str = "",
+    reset_params: list[str] | None = None,
+) -> None:
+    base_params = current_query_params_dict()
+    reset_params = reset_params or []
+    links: list[str] = []
+    for option in options:
+        params = base_params.copy()
+        params[param_name] = slugify_tab_label(option)
+        for reset_param in reset_params:
+            params.pop(reset_param, None)
+        href = "?" + urlencode(params) if params else "?"
+        active_class = " active" if option == selected else ""
+        links.append(
+            f'<a class="atlas-tablink{active_class}" href="{escape(href, quote=True)}">{escape(option)}</a>'
+        )
+    class_suffix = f" {css_class}" if css_class else ""
+    st.markdown(f'<nav class="atlas-tabbar{class_suffix}">{"".join(links)}</nav>', unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -3712,13 +3721,17 @@ def main() -> None:
 
     # Top navigation keeps the previous tab-like layout while preserving the
     # memory optimization: only the selected workspace loads its heavy data.
-    workspace = st.radio(
-        "AtlasFlow section",
-        options=workspace_options,
-        horizontal=True,
-        key="atlas_workspace",
-        label_visibility="collapsed",
-        help="Only the selected section loads heavy API sources into memory.",
+    workspace = get_tab_selection(
+        "workspace",
+        workspace_options,
+        st.session_state.get("atlas_workspace", "Custom Analytics"),
+    )
+    st.session_state["atlas_workspace"] = workspace
+    render_text_tab_bar(
+        workspace_options,
+        workspace,
+        param_name="workspace",
+        reset_params=["preview"],
     )
 
     active_wide_sources: set[str] = set()
@@ -3806,11 +3819,18 @@ def main() -> None:
         st.caption(
             "Choose which table you want to preview and export. The visible table below is the same table prepared for Excel."
         )
-        preview_mode = st.radio(
-            "Preview table",
-            options=["Clean Dataset", "Summary Analysis", "Source Data"],
-            horizontal=True,
-            key="atlas_reportdata_preview_mode",
+        preview_options = ["Clean Dataset", "Summary Analysis", "Source Data"]
+        preview_mode = get_tab_selection(
+            "preview",
+            preview_options,
+            st.session_state.get("atlas_reportdata_preview_mode", "Clean Dataset"),
+        )
+        st.session_state["atlas_reportdata_preview_mode"] = preview_mode
+        render_text_tab_bar(
+            preview_options,
+            preview_mode,
+            param_name="preview",
+            css_class="compact",
         )
 
         if preview_mode == "Summary Analysis":
