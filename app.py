@@ -653,6 +653,34 @@ def apply_custom_css() -> None:
             font-weight: 760 !important;
         }
 
+
+
+        /* Sidebar confirmation/warning cards need dark text on the light card.
+           The general sidebar rule forces labels/text to white, so alerts must
+           be overridden explicitly for readability. */
+        section[data-testid="stSidebar"] div[data-testid="stAlert"],
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] > div,
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] [role="alert"] {
+            background: rgba(255, 255, 255, 0.96) !important;
+            border: 1px solid rgba(0, 107, 104, 0.28) !important;
+            border-radius: 9px !important;
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.10) !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] *,
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] p,
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] span,
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] div {
+            color: var(--atlas-ink) !important;
+            -webkit-text-fill-color: var(--atlas-ink) !important;
+            font-weight: 650 !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] svg {
+            color: var(--atlas-teal) !important;
+            fill: var(--atlas-teal) !important;
+        }
+
         section[data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
         section[data-testid="stSidebar"] [data-testid="stTooltipIcon"],
         section[data-testid="stSidebar"] button[aria-label="Help"],
