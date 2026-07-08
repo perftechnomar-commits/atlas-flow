@@ -28,7 +28,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 # Configuration
 # =============================================================================
 
-APP_TITLE = "Atlas Flow"
+APP_TITLE = "AtlasFlow"
 APP_DIR = Path(__file__).resolve().parent
 SNAPSHOT_DIR = APP_DIR / ".atlasflow_cache"
 RAW_SNAPSHOT_FILE = SNAPSHOT_DIR / "reportdata_raw.parquet"
@@ -1148,7 +1148,7 @@ def apply_custom_css() -> None:
         <div class="atlas-topbar-brand" aria-hidden="true">
             <div class="atlas-menu-lines"><span></span></div>
             <div class="atlas-logo-mark"></div>
-            <div class="atlas-brand-word">AtlasFlow</div>
+            <div class="atlas-brand-word">Atlas Flow</div>
         </div>
         """,
         unsafe_allow_html=True,
