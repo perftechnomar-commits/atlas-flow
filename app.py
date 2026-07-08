@@ -28,7 +28,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 # Configuration
 # =============================================================================
 
-APP_TITLE = "AtlasFlow"
+APP_TITLE = "Atlas Flow"
 APP_DIR = Path(__file__).resolve().parent
 SNAPSHOT_DIR = APP_DIR / ".atlasflow_cache"
 RAW_SNAPSHOT_FILE = SNAPSHOT_DIR / "reportdata_raw.parquet"
