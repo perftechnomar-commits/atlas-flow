@@ -60,7 +60,8 @@ SOURCE_CONFIGS = {
         "datetime_candidates": ["DateTime", "StartDateTimeGMT", "Timestamp"],
     },
 }
-MAX_ODATA_PAGES = 250
+MAX_ODATA_PAGES = 1000
+MAX_CONSECUTIVE_EMPTY_ODATA_PAGES = 2
 API_CACHE_TTL_SECONDS = 21600  # 6 hours
 API_FULL_START_DATE = date(2026, 1, 1)
 TABLE_PREVIEW_ROW_LIMIT = 1000
@@ -1353,6 +1354,31 @@ def extract_odata_page(payload: Any) -> tuple[list[dict[str, Any]], str | None]:
     return rows, next_link
 
 
+def should_continue_odata_paging(
+    *,
+    current_url: str,
+    next_link: str | None,
+    seen_urls: set[str],
+    consecutive_empty_pages: int,
+) -> tuple[bool, str | None, str | None]:
+    """Return whether OData paging should continue plus next URL and stop reason.
+
+    AtlasFlow follows the OData nextLink until the feed is exhausted, but still
+    protects Streamlit Cloud from pagination loops or abnormal empty-page runs.
+    """
+    if not next_link:
+        return False, None, "end_of_feed"
+
+    if consecutive_empty_pages >= MAX_CONSECUTIVE_EMPTY_ODATA_PAGES:
+        return False, None, "consecutive_empty_pages"
+
+    resolved_next_url = urljoin(current_url, next_link)
+    if resolved_next_url in seen_urls:
+        return False, None, "repeated_next_link"
+
+    return True, resolved_next_url, None
+
+
 def rows_to_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if "__metadata" in df.columns:
@@ -1391,6 +1417,8 @@ def fetch_report_data(
     pages = 0
     total_bytes = 0
     scanned_rows = 0
+    consecutive_empty_pages = 0
+    paging_stop_reason = "max_page_limit"
     first_url = next_url
     auth = request_auth(username, password, auth_method)
     headers = request_headers(token, auth_method)
@@ -1399,6 +1427,7 @@ def fetch_report_data(
         session.headers.update(headers)
         for _ in range(MAX_ODATA_PAGES):
             if next_url in seen_urls:
+                paging_stop_reason = "repeated_current_url"
                 break
             seen_urls.add(next_url)
 
@@ -1410,10 +1439,18 @@ def fetch_report_data(
             page_rows, next_link = extract_odata_page(response.json())
             scanned_rows += len(page_rows)
             kept_rows.extend(compact_odata_rows(page_rows))
+            consecutive_empty_pages = consecutive_empty_pages + 1 if len(page_rows) == 0 else 0
 
-            if not next_link:
+            should_continue, resolved_next_url, stop_reason = should_continue_odata_paging(
+                current_url=next_url,
+                next_link=next_link,
+                seen_urls=seen_urls,
+                consecutive_empty_pages=consecutive_empty_pages,
+            )
+            if not should_continue:
+                paging_stop_reason = stop_reason
                 break
-            next_url = urljoin(next_url, next_link)
+            next_url = resolved_next_url or next_url
 
     loaded_at_utc = datetime.now(timezone.utc)
     metadata = {
@@ -1427,7 +1464,9 @@ def fetch_report_data(
         "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
         "fetch_seconds": round(time.perf_counter() - started_at, 2),
         "first_url": first_url,
-        "hit_page_limit": pages >= MAX_ODATA_PAGES,
+        "hit_page_limit": pages >= MAX_ODATA_PAGES and paging_stop_reason == "max_page_limit",
+        "paging_stop_reason": paging_stop_reason,
+        "max_pages": MAX_ODATA_PAGES,
     }
     return rows_to_dataframe(kept_rows), metadata
 
@@ -1471,6 +1510,8 @@ def fetch_wide_odata_source(
     rows: list[dict[str, Any]] = []
     pages = 0
     total_bytes = 0
+    consecutive_empty_pages = 0
+    paging_stop_reason = "max_page_limit"
     started_at = time.perf_counter()
     auth = request_auth(username, password, auth_method)
     headers = request_headers(token, auth_method)
@@ -1479,6 +1520,7 @@ def fetch_wide_odata_source(
         session.headers.update(headers)
         for _ in range(MAX_ODATA_PAGES):
             if next_url in seen_urls:
+                paging_stop_reason = "repeated_current_url"
                 break
             seen_urls.add(next_url)
             response = request_with_retry(session, next_url, auth=auth, timeout=90)
@@ -1487,9 +1529,17 @@ def fetch_wide_odata_source(
             pages += 1
             page_rows, next_link = extract_odata_page(response.json())
             rows.extend(page_rows)
-            if not next_link:
+            consecutive_empty_pages = consecutive_empty_pages + 1 if len(page_rows) == 0 else 0
+            should_continue, resolved_next_url, stop_reason = should_continue_odata_paging(
+                current_url=next_url,
+                next_link=next_link,
+                seen_urls=seen_urls,
+                consecutive_empty_pages=consecutive_empty_pages,
+            )
+            if not should_continue:
+                paging_stop_reason = stop_reason
                 break
-            next_url = urljoin(next_url, next_link)
+            next_url = resolved_next_url or next_url
 
     df = pd.DataFrame(rows)
     if "__metadata" in df.columns:
@@ -1508,7 +1558,9 @@ def fetch_wide_odata_source(
         "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
         "fetch_seconds": round(time.perf_counter() - started_at, 2),
         "first_url": first_url,
-        "hit_page_limit": pages >= MAX_ODATA_PAGES,
+        "hit_page_limit": pages >= MAX_ODATA_PAGES and paging_stop_reason == "max_page_limit",
+        "paging_stop_reason": paging_stop_reason,
+        "max_pages": MAX_ODATA_PAGES,
     }
     return df, metadata
 
@@ -3105,6 +3157,8 @@ def fetch_report_data_to_snapshot(
     total_bytes = 0
     scanned_rows = 0
     kept_rows_total = 0
+    consecutive_empty_pages = 0
+    paging_stop_reason = "max_page_limit"
     # Use a unique temporary file per warmup request. Streamlit Cloud can run
     # multiple warmup/browser sessions at the same time; a fixed .tmp.parquet
     # name can be deleted by another session before this request reaches replace().
@@ -3124,6 +3178,7 @@ def fetch_report_data_to_snapshot(
             session.headers.update(headers)
             for _ in range(MAX_ODATA_PAGES):
                 if next_url in seen_urls:
+                    paging_stop_reason = "repeated_current_url"
                     break
                 seen_urls.add(next_url)
 
@@ -3144,12 +3199,20 @@ def fetch_report_data_to_snapshot(
                     kept_rows_total += len(page_df)
                     del page_df, table
 
+                consecutive_empty_pages = consecutive_empty_pages + 1 if len(page_rows) == 0 else 0
                 del page_rows, compact_rows
                 gc.collect()
 
-                if not next_link:
+                should_continue, resolved_next_url, stop_reason = should_continue_odata_paging(
+                    current_url=next_url,
+                    next_link=next_link,
+                    seen_urls=seen_urls,
+                    consecutive_empty_pages=consecutive_empty_pages,
+                )
+                if not should_continue:
+                    paging_stop_reason = stop_reason
                     break
-                next_url = urljoin(next_url, next_link)
+                next_url = resolved_next_url or next_url
     finally:
         if writer is not None:
             writer.close()
@@ -3178,7 +3241,9 @@ def fetch_report_data_to_snapshot(
         "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
         "fetch_seconds": round(time.perf_counter() - started_at, 2),
         "first_url": first_url,
-        "hit_page_limit": pages >= MAX_ODATA_PAGES,
+        "hit_page_limit": pages >= MAX_ODATA_PAGES and paging_stop_reason == "max_page_limit",
+        "paging_stop_reason": paging_stop_reason,
+        "max_pages": MAX_ODATA_PAGES,
         "loaded_start_date": start_date.isoformat(),
         "snapshot_format": "parquet",
         "reportdata_mode": "atlasflow_consumption_oil_stats_whitelist",
@@ -3213,6 +3278,8 @@ def fetch_wide_source_to_snapshot(
     pages = 0
     total_bytes = 0
     row_count = 0
+    consecutive_empty_pages = 0
+    paging_stop_reason = "max_page_limit"
     all_columns: list[str] = []
     target_file = Path(config["snapshot_file"])
     # Use a unique temporary file per warmup request to avoid cross-session
@@ -3234,6 +3301,7 @@ def fetch_wide_source_to_snapshot(
             session.headers.update(headers)
             for _ in range(MAX_ODATA_PAGES):
                 if next_url in seen_urls:
+                    paging_stop_reason = "repeated_current_url"
                     break
                 seen_urls.add(next_url)
                 response = request_with_retry(session, next_url, auth=auth, timeout=90)
@@ -3275,12 +3343,20 @@ def fetch_wide_source_to_snapshot(
                     row_count += len(page_df)
                     del page_df, table
 
+                consecutive_empty_pages = consecutive_empty_pages + 1 if len(page_rows) == 0 else 0
                 del page_rows
                 gc.collect()
 
-                if not next_link:
+                should_continue, resolved_next_url, stop_reason = should_continue_odata_paging(
+                    current_url=next_url,
+                    next_link=next_link,
+                    seen_urls=seen_urls,
+                    consecutive_empty_pages=consecutive_empty_pages,
+                )
+                if not should_continue:
+                    paging_stop_reason = stop_reason
                     break
-                next_url = urljoin(next_url, next_link)
+                next_url = resolved_next_url or next_url
     finally:
         if writer is not None:
             writer.close()
@@ -3323,7 +3399,9 @@ def fetch_wide_source_to_snapshot(
         "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
         "fetch_seconds": round(time.perf_counter() - started_at, 2),
         "first_url": first_url,
-        "hit_page_limit": pages >= MAX_ODATA_PAGES,
+        "hit_page_limit": pages >= MAX_ODATA_PAGES and paging_stop_reason == "max_page_limit",
+        "paging_stop_reason": paging_stop_reason,
+        "max_pages": MAX_ODATA_PAGES,
         "snapshot_format": "parquet",
     }
     signature = source_signature(source_key, username, auth_method, start_date)
@@ -3587,8 +3665,8 @@ def main() -> None:
 
     if metadata.get("hit_page_limit"):
         st.warning(
-            "The API refresh reached the page safety limit. The loaded dataset may be incomplete. "
-            "Check API Diagnostics before using the export."
+            "The API refresh reached the maximum page safety limit before the feed ended. "
+            "The loaded dataset may be incomplete. Check API Diagnostics before using the export."
         )
 
     if not selected_variables:
@@ -4001,6 +4079,8 @@ def main() -> None:
                     "API fetch seconds",
                     "Prepare seconds",
                     "Hit API page limit",
+                    "Paging stop reason",
+                    "Max page safety limit",
                 ],
                 "Value": [
                     ", ".join(selected_vessels),
@@ -4026,6 +4106,8 @@ def main() -> None:
                     metadata.get("fetch_seconds", "-"),
                     metadata.get("prepare_seconds", "-"),
                     str(metadata.get("hit_page_limit", "-")),
+                    metadata.get("paging_stop_reason", "-"),
+                    f"{metadata.get('max_pages', MAX_ODATA_PAGES):,}",
                 ],
             }
         )
