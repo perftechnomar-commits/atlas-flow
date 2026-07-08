@@ -942,6 +942,76 @@ def apply_custom_css() -> None:
             background: var(--atlas-teal);
         }
 
+
+        /* Native Streamlit radio widgets used as text-only tab bars.
+           This avoids HTML links, so tab clicks never open a browser tab. */
+        div[data-testid="stRadio"] > div[role="radiogroup"] {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: wrap !important;
+            align-items: flex-end !important;
+            gap: 1.35rem !important;
+            border-bottom: 1px solid var(--atlas-line) !important;
+            padding: 0 0 0.05rem 0 !important;
+            margin: 0.35rem 0 1rem 0 !important;
+        }
+
+        div[data-testid="stRadio"] > div[role="radiogroup"] label {
+            position: relative !important;
+            min-height: 42px !important;
+            padding: 0 0.45rem 0.58rem 0.45rem !important;
+            margin: 0 !important;
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            cursor: pointer !important;
+            display: inline-flex !important;
+            align-items: center !important;
+        }
+
+        div[data-testid="stRadio"] > div[role="radiogroup"] label div[data-baseweb="radio"],
+        div[data-testid="stRadio"] > div[role="radiogroup"] label > div:has(input[type="radio"]),
+        div[data-testid="stRadio"] > div[role="radiogroup"] label input[type="radio"] {
+            display: none !important;
+        }
+
+        div[data-testid="stRadio"] > div[role="radiogroup"] label p,
+        div[data-testid="stRadio"] > div[role="radiogroup"] label span,
+        div[data-testid="stRadio"] > div[role="radiogroup"] label [data-testid="stMarkdownContainer"] * {
+            color: #334155 !important;
+            -webkit-text-fill-color: #334155 !important;
+            font-size: 0.94rem !important;
+            font-weight: 500 !important;
+            line-height: 1.15 !important;
+            text-decoration: none !important;
+        }
+
+        div[data-testid="stRadio"] > div[role="radiogroup"] label:hover p,
+        div[data-testid="stRadio"] > div[role="radiogroup"] label:hover span,
+        div[data-testid="stRadio"] > div[role="radiogroup"] label:hover [data-testid="stMarkdownContainer"] * {
+            color: var(--atlas-teal) !important;
+            -webkit-text-fill-color: var(--atlas-teal) !important;
+        }
+
+        div[data-testid="stRadio"] > div[role="radiogroup"] label:has(input[type="radio"]:checked) p,
+        div[data-testid="stRadio"] > div[role="radiogroup"] label:has(input[type="radio"]:checked) span,
+        div[data-testid="stRadio"] > div[role="radiogroup"] label:has(input[type="radio"]:checked) [data-testid="stMarkdownContainer"] * {
+            color: var(--atlas-teal) !important;
+            -webkit-text-fill-color: var(--atlas-teal) !important;
+            font-weight: 700 !important;
+        }
+
+        div[data-testid="stRadio"] > div[role="radiogroup"] label:has(input[type="radio"]:checked)::after {
+            content: "";
+            position: absolute;
+            left: 0.25rem;
+            right: 0.25rem;
+            bottom: -0.05rem;
+            height: 2px;
+            border-radius: 999px;
+            background: var(--atlas-teal);
+        }
+
         .atlas-metric-grid {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1225,22 +1295,42 @@ def render_text_tab_bar(
     param_name: str,
     css_class: str = "",
     reset_params: list[str] | None = None,
-) -> None:
-    base_params = current_query_params_dict()
-    reset_params = reset_params or []
-    links: list[str] = []
-    for option in options:
-        params = base_params.copy()
-        params[param_name] = slugify_tab_label(option)
-        for reset_param in reset_params:
-            params.pop(reset_param, None)
-        href = "?" + urlencode(params) if params else "?"
-        active_class = " active" if option == selected else ""
-        links.append(
-            f'<a class="atlas-tablink{active_class}" href="{escape(href, quote=True)}">{escape(option)}</a>'
-        )
-    class_suffix = f" {css_class}" if css_class else ""
-    st.markdown(f'<nav class="atlas-tabbar{class_suffix}">{"".join(links)}</nav>', unsafe_allow_html=True)
+) -> str:
+    """Render a native Streamlit text-tab selector.
+
+    Older AtlasFlow batches used HTML anchor links for the tab strip. Those
+    looked correct, but browsers treated them as links and sometimes opened the
+    app in a new tab. This version uses st.radio under the hood, styled as
+    text-only tabs, so clicking a tab only updates Streamlit session state.
+    """
+    if not options:
+        return selected
+
+    key_suffix = slugify_tab_label(css_class) if css_class else "main"
+    state_key = f"atlas_tab_{param_name}_{key_suffix}"
+    if selected not in options:
+        selected = options[0]
+    if st.session_state.get(state_key) not in options:
+        st.session_state[state_key] = selected
+
+    previous_value = st.session_state.get(state_key, selected)
+    choice = st.radio(
+        " ",
+        options=options,
+        horizontal=True,
+        label_visibility="collapsed",
+        key=state_key,
+    )
+
+    if choice != previous_value:
+        for reset_param in reset_params or []:
+            reset_key = f"atlas_tab_{reset_param}_compact"
+            st.session_state.pop(reset_key, None)
+            if reset_param == "preview":
+                st.session_state["atlas_reportdata_preview_mode"] = "Clean Dataset"
+        st.session_state[state_key] = choice
+
+    return choice
 
 
 # =============================================================================
@@ -3726,13 +3816,13 @@ def main() -> None:
         workspace_options,
         st.session_state.get("atlas_workspace", "Custom Analytics"),
     )
-    st.session_state["atlas_workspace"] = workspace
-    render_text_tab_bar(
+    workspace = render_text_tab_bar(
         workspace_options,
         workspace,
         param_name="workspace",
         reset_params=["preview"],
     )
+    st.session_state["atlas_workspace"] = workspace
 
     active_wide_sources: set[str] = set()
     if workspace == "Noon & Manual Reports":
@@ -3825,13 +3915,13 @@ def main() -> None:
             preview_options,
             st.session_state.get("atlas_reportdata_preview_mode", "Clean Dataset"),
         )
-        st.session_state["atlas_reportdata_preview_mode"] = preview_mode
-        render_text_tab_bar(
+        preview_mode = render_text_tab_bar(
             preview_options,
             preview_mode,
             param_name="preview",
             css_class="compact",
         )
+        st.session_state["atlas_reportdata_preview_mode"] = preview_mode
 
         if preview_mode == "Summary Analysis":
             st.markdown('<div class="section-title">Summary Builder</div>', unsafe_allow_html=True)
