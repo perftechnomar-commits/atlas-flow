@@ -920,10 +920,31 @@ def apply_custom_css() -> None:
             cursor: pointer !important;
         }
 
-        [data-testid="stRadio"] [role="radiogroup"] label > div:first-child,
+        /* Hide every native radio indicator/circle and keep only clickable text.
+           Streamlit/BaseWeb changes the exact DOM across versions, so this uses
+           several safe selectors for the indicator while preserving markdown text. */
+        [data-testid="stRadio"] [role="radiogroup"] input[type="radio"],
+        [data-testid="stRadio"] [role="radiogroup"] label::before,
+        [data-testid="stRadio"] [role="radiogroup"] label > div:first-child:not([data-testid="stMarkdownContainer"]),
+        [data-testid="stRadio"] [role="radiogroup"] label > div:nth-child(2):not([data-testid="stMarkdownContainer"]),
+        [data-testid="stRadio"] [role="radiogroup"] label [data-baseweb="radio"],
+        [data-testid="stRadio"] [role="radiogroup"] label [data-baseweb="radio"] *,
         [data-testid="stRadio"] [role="radiogroup"] label [data-testid="stMarkdownContainer"] + div,
         [data-testid="stRadio"] [role="radiogroup"] label svg {
             display: none !important;
+            width: 0 !important;
+            min-width: 0 !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label [data-testid="stMarkdownContainer"] {
+            margin-left: 0 !important;
+            padding-left: 0 !important;
         }
 
         [data-testid="stRadio"] [role="radiogroup"] label *,
