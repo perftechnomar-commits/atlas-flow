@@ -3218,7 +3218,7 @@ def sidebar_refresh_control() -> bool:
         last_load = metadata.get("loaded_at_local") or metadata.get("loaded_at_utc") or "-"
         last_load_display = str(last_load).replace(" EEST", "").replace(" EET", "")
         st.sidebar.warning(
-            "Refresh will call all AtlasFlow APIs and may take a while.\n\n"
+            "Refresh will call all Atlas Flow APIs and may take a while.\n\n"
             f"Last updated data was on: {last_load_display} LT"
         )
         col1, col2 = st.sidebar.columns(2)
