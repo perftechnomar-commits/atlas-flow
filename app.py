@@ -1191,6 +1191,28 @@ def apply_custom_css() -> None:
             box-shadow: none !important;
         }
 
+        /* Final high-specificity sidebar alert override: Streamlit's markdown
+           container inside the alert was still inheriting the global sidebar
+           white-text rule. Keep the alert card light and force readable text. */
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] [data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] [data-testid="stMarkdownContainer"] *,
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] [data-testid="stAlertContent"],
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] [data-testid="stAlertContent"] *,
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] [role="alert"],
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] [role="alert"] *,
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] p,
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] span {
+            color: #0B1F33 !important;
+            -webkit-text-fill-color: #0B1F33 !important;
+            opacity: 1 !important;
+            font-weight: 650 !important;
+            text-shadow: none !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] {
+            background: #FFFFFF !important;
+        }
+
         .stButton button,
         .stDownloadButton button,
         div[data-testid="stButton"] button,
