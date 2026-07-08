@@ -3546,20 +3546,27 @@ def main() -> None:
     if not identity_columns:
         identity_columns = ["ShipName"]
 
-    st.sidebar.markdown("### Workspace")
-    workspace = st.sidebar.radio(
-        "Open section",
-        options=[
-            "Custom Analytics",
-            "Noon & Manual Reports",
-            "15-Minute Operations",
-            "Descriptive Statistics",
-            "Export Center",
-            "API Diagnostics",
-        ],
-        index=0,
+    workspace_options = [
+        "Custom Analytics",
+        "Noon & Manual Reports",
+        "15-Minute Operations",
+        "Descriptive Statistics",
+        "Export Center",
+        "API Diagnostics",
+    ]
+
+    render_header(selected_group, selected_vessels, selected_variables)
+    render_api_load_caption(metadata)
+
+    # Top navigation keeps the previous tab-like layout while preserving the
+    # memory optimization: only the selected workspace loads its heavy data.
+    workspace = st.radio(
+        "AtlasFlow section",
+        options=workspace_options,
+        horizontal=True,
         key="atlas_workspace",
-        help="AtlasFlow now loads heavy API sources only when you open the section that needs them.",
+        label_visibility="collapsed",
+        help="Only the selected section loads heavy API sources into memory.",
     )
 
     active_wide_sources: set[str] = set()
@@ -3577,9 +3584,6 @@ def main() -> None:
         # Wide sources are loaded inside the export button only, not during normal render.
         active_wide_sources = set()
     clear_inactive_wide_sources(active_wide_sources)
-
-    render_header(selected_group, selected_vessels, selected_variables)
-    render_api_load_caption(metadata)
 
     if metadata.get("hit_page_limit"):
         st.warning(
@@ -3620,8 +3624,6 @@ def main() -> None:
         display_columns = [column for column in DEFAULT_DISPLAY_IDENTITY_COLUMNS if column in filtered_pivot_df.columns]
 
     output_df = filtered_pivot_df[display_columns].copy()
-
-    st.markdown(f'<div class="atlas-pill"><span>Workspace:</span> {escape(workspace)}</div>', unsafe_allow_html=True)
 
     # Shared Custom Analytics preview/export configuration. It is only fully rendered in
     # Custom Analytics, but Export Center can reuse the saved choices.
