@@ -3159,6 +3159,72 @@ def set_loaded_long_state(long_df: pd.DataFrame, signature: dict[str, Any]) -> N
     st.session_state["loaded_prepare_signature"] = signature
 
 
+def activate_reportdata_snapshot(
+    username: str,
+    auth_method: str,
+    start_date: date,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Load the latest ReportData snapshot and seed the shared transform cache once."""
+    signature = request_signature(username, auth_method, start_date)
+    snapshot = load_raw_snapshot(signature, start_date)
+    if snapshot is None:
+        raise FileNotFoundError("The refreshed ReportData snapshot could not be loaded.")
+
+    raw_df, metadata, snapshot_signature = snapshot
+    cached_prepare_long_data.clear()
+    build_pivot_table.clear()
+    long_df = cached_prepare_long_data(raw_df)
+
+    set_loaded_raw_state(raw_df, metadata, snapshot_signature)
+    prepare_signature = {
+        **signature,
+        "prepare_version": "atlasflow_dynamic_pivot_v3_oil_stats",
+    }
+    set_loaded_long_state(long_df, prepare_signature)
+
+    active_metadata = st.session_state.get("loaded_metadata")
+    if isinstance(active_metadata, dict):
+        active_metadata["long_rows"] = int(len(long_df))
+        active_metadata["available_variables"] = (
+            int(long_df["ValueDescription"].nunique())
+            if "ValueDescription" in long_df.columns
+            else 0
+        )
+        st.session_state["loaded_metadata"] = active_metadata
+        metadata = active_metadata
+
+    return raw_df, long_df, metadata
+
+
+def refresh_all_atlasflow_snapshots(
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    start_date: date,
+) -> dict[str, dict[str, Any]]:
+    """Refresh each API once into an atomic snapshot, then activate the new data."""
+    results: dict[str, dict[str, Any]] = {}
+
+    results["reportdata"] = fetch_report_data_to_snapshot(
+        username, password, token, auth_method, start_date
+    )
+    results["reportpivots"] = fetch_wide_source_to_snapshot(
+        "reportpivots", username, password, token, auth_method, start_date
+    )
+    results["shippivots"] = fetch_wide_source_to_snapshot(
+        "shippivots", username, password, token, auth_method, start_date
+    )
+
+    cached_fetch_report_data.clear()
+    cached_fetch_wide_odata_source.clear()
+    clear_wide_source_state("reportpivots")
+    clear_wide_source_state("shippivots")
+    activate_reportdata_snapshot(username, auth_method, start_date)
+    gc.collect()
+    return results
+
+
 def selected_vessel_controls() -> tuple[str, list[str]]:
     group_options = ["Single vessel", "All fleets"] + list(VESSEL_GROUPS.keys())
     selected_group = st.sidebar.selectbox("Fleet group", options=group_options, key="atlas_fleet_group")
@@ -3676,31 +3742,59 @@ def run_warmup_if_requested() -> None:
 
     force_refresh = get_query_param("force", "0") == "1"
 
-    # Do not clear active Streamlit caches before the new API pull succeeds.
-    # The snapshot writers already use unique temporary parquet files and only
-    # replace the previous good snapshot after the fresh fetch has completed.
-    # Clearing cached data after success avoids an empty/slow window for users
-    # who are actively browsing while Task Scheduler is warming up ReportData.
     try:
         with st.spinner(f"Warming up AtlasFlow source: {requested_source}..."):
             if requested_source == "reportdata":
-                metadata = fetch_report_data_to_snapshot(username, password, token, auth_method, start_date)
-            else:
-                metadata = fetch_wide_source_to_snapshot(requested_source, username, password, token, auth_method, start_date)
-
-            if force_refresh:
-                if requested_source == "reportdata":
-                    cached_fetch_report_data.clear()
-                    cached_prepare_long_data.clear()
-                    build_pivot_table.clear()
+                signature = request_signature(username, auth_method, start_date)
+                snapshot = None if force_refresh else load_raw_snapshot(signature, start_date)
+                if snapshot is None:
+                    metadata = fetch_report_data_to_snapshot(
+                        username, password, token, auth_method, start_date
+                    )
                 else:
-                    cached_fetch_wide_odata_source.clear()
+                    _, metadata, _ = snapshot
+
+                # The API is fetched at most once. After success, seed the shared
+                # prepared-data cache from the snapshot used by normal app sessions.
+                cached_fetch_report_data.clear()
+                _, long_df, metadata = activate_reportdata_snapshot(
+                    username, auth_method, start_date
+                )
+                metadata = metadata.copy()
+                metadata["long_rows"] = int(len(long_df))
+            else:
+                signature = source_signature(
+                    requested_source, username, auth_method, start_date
+                )
+                snapshot = None if force_refresh else load_source_snapshot(
+                    requested_source, signature, start_date
+                )
+                if snapshot is None:
+                    metadata = fetch_wide_source_to_snapshot(
+                        requested_source,
+                        username,
+                        password,
+                        token,
+                        auth_method,
+                        start_date,
+                    )
+                else:
+                    _, metadata, _ = snapshot
+
+                cached_fetch_wide_odata_source.clear()
+                clear_wide_source_state(requested_source)
                 gc.collect()
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
         st.error(f"Warmup failed: Marorka API request failed with status {status}.")
         st.stop()
-    except (MarorkaConfigError, ValueError, requests.RequestException) as exc:
+    except (
+        MarorkaConfigError,
+        ValueError,
+        FileNotFoundError,
+        RuntimeError,
+        requests.RequestException,
+    ) as exc:
         st.error(f"Warmup failed: {exc}")
         st.stop()
 
@@ -3744,18 +3838,49 @@ def main() -> None:
     refresh = sidebar_refresh_control()
     selected_group, selected_vessels = selected_vessel_controls()
 
+    if refresh:
+        try:
+            with st.spinner("Refreshing AtlasFlow APIs one source at a time..."):
+                refresh_all_atlasflow_snapshots(
+                    username,
+                    password,
+                    token,
+                    auth_method,
+                    api_start_date,
+                )
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            st.error(
+                f"AtlasFlow refresh failed with status {status}. "
+                "Existing session data and the last valid snapshots remain available."
+            )
+            st.stop()
+        except (
+            MarorkaConfigError,
+            ValueError,
+            FileNotFoundError,
+            RuntimeError,
+            requests.RequestException,
+        ) as exc:
+            st.error(
+                "AtlasFlow refresh failed. Existing session data and the last valid "
+                f"snapshots remain available. Details: {exc}"
+            )
+            st.stop()
+        st.success("All AtlasFlow API snapshots refreshed successfully.")
+        st.rerun()
+
     raw_signature = request_signature(username, auth_method, api_start_date)
     current_raw_signature = st.session_state.get("loaded_request_signature")
     raw_df, long_df, metadata = get_loaded_state()
 
     needs_raw_load = (
-        refresh
-        or raw_df is None
+        raw_df is None
         or metadata is None
         or not raw_data_covers_request(current_raw_signature, metadata, raw_signature, api_start_date)
     )
 
-    if needs_raw_load and not refresh:
+    if needs_raw_load:
         snapshot = load_raw_snapshot(raw_signature, api_start_date)
         if snapshot is not None:
             raw_df, metadata, snapshot_signature = snapshot
