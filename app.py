@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from html import escape
@@ -22,6 +23,11 @@ from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Streamlit Cloud runs on Linux.
+    fcntl = None
 
 
 # =============================================================================
@@ -66,6 +72,35 @@ API_CACHE_TTL_SECONDS = 21600  # 6 hours
 API_FULL_START_DATE = date(2026, 1, 1)
 TABLE_PREVIEW_ROW_LIMIT = 1000
 DISPLAY_DATETIME_FORMAT = "%d/%m/%Y %H:%M"
+
+
+# Persistent, user-ready multi-source snapshot settings.
+ATLAS_SNAPSHOT_SCHEMA_VERSION = "2026-07-15-multisource-prepared-incremental-v1"
+ATLAS_SNAPSHOT_GENERATIONS_TO_KEEP = 2
+ATLAS_PREPARE_VERSION = "atlasflow_dynamic_pivot_v3_oil_stats_prepared_v1"
+API_REQUEST_TIMEOUT_SECONDS = 60
+API_REQUEST_MAX_ATTEMPTS = 3
+
+DEFAULT_SOURCE_CHUNK_DAYS = {
+    "reportdata": 31,
+    "reportpivots": 31,
+    "shippivots": 7,
+}
+DEFAULT_SOURCE_OVERLAP_DAYS = {
+    "reportdata": 14,
+    "reportpivots": 14,
+    "shippivots": 3,
+}
+DEFAULT_SOURCE_FULL_REFRESH_MAX_MINUTES = {
+    "reportdata": 240,
+    "reportpivots": 240,
+    "shippivots": 360,
+}
+DEFAULT_SOURCE_INCREMENTAL_REFRESH_MAX_MINUTES = {
+    "reportdata": 45,
+    "reportpivots": 60,
+    "shippivots": 90,
+}
 
 EXCLUDED_REPORT_TYPES = [
     "Intake Report",
@@ -3704,12 +3739,1399 @@ def fetch_wide_source_to_snapshot(
     return metadata
 
 
+
+
+# =============================================================================
+# Persistent prepared multi-source snapshots and incremental refresh
+# =============================================================================
+
+
+class AtlasRefreshAlreadyRunning(RuntimeError):
+    pass
+
+
+def read_int_secret(
+    name: str,
+    default: int,
+    *,
+    minimum: int = 0,
+    maximum: int = 10000,
+) -> int:
+    try:
+        value = int(read_secret(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, minimum), maximum)
+
+
+def source_secret_name(source_key: str, suffix: str) -> str:
+    return f"ATLASFLOW_{source_key.upper()}_{suffix}"
+
+
+def source_primary_datetime_column(source_key: str) -> str:
+    if source_key == "reportdata":
+        return "StartDateTimeGMT"
+    candidates = list(SOURCE_CONFIGS[source_key].get("datetime_candidates", []))
+    return str(candidates[0] if candidates else "DateTime")
+
+
+def source_manifest_path(source_key: str) -> Path:
+    return SNAPSHOT_DIR / f"{source_key}_prepared_manifest.json"
+
+
+def source_lock_path(source_key: str) -> Path:
+    return SNAPSHOT_DIR / f"{source_key}_refresh.lock"
+
+
+def source_status_path(source_key: str) -> Path:
+    return SNAPSHOT_DIR / f"{source_key}_refresh_status.json"
+
+
+def source_snapshot_path(source_key: str, generation: str) -> Path:
+    return SNAPSHOT_DIR / f"{source_key}_prepared_{generation}.parquet"
+
+
+def source_data_signature(source_key: str) -> str:
+    if source_key == "reportdata":
+        signature_text = "|".join(
+            [
+                ATLAS_SNAPSHOT_SCHEMA_VERSION,
+                ATLAS_PREPARE_VERSION,
+                *REPORTDATA_VALUE_WHITELIST,
+                *SOURCE_COLUMNS,
+            ]
+        )
+    else:
+        config = SOURCE_CONFIGS[source_key]
+        signature_text = "|".join(
+            [
+                ATLAS_SNAPSHOT_SCHEMA_VERSION,
+                source_key,
+                str(config["endpoint"]),
+                *map(str, config.get("datetime_candidates", [])),
+            ]
+        )
+    return sha256(signature_text.encode("utf-8")).hexdigest()[:16]
+
+
+def atlas_source_signature(
+    source_key: str,
+    username: str,
+    auth_method: str,
+    start_date: date,
+) -> dict[str, Any]:
+    config = SOURCE_CONFIGS[source_key]
+    return {
+        "source": source_key,
+        "endpoint": str(config["endpoint"]),
+        "username_hash": sha256(username.encode("utf-8")).hexdigest()[:12],
+        "auth_method": auth_method.lower(),
+        "start_date": start_date.isoformat(),
+        "data_signature": source_data_signature(source_key),
+    }
+
+
+def source_signature_covers_request(
+    stored_signature: dict[str, Any] | None,
+    requested_signature: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+    requested_start_date: date,
+) -> bool:
+    if not stored_signature or not requested_signature or not metadata:
+        return False
+    for key in ["endpoint", "username_hash", "auth_method"]:
+        if stored_signature.get(key) != requested_signature.get(key):
+            return False
+    source_key = str(requested_signature.get("source") or stored_signature.get("source") or "reportdata")
+    expected_data_signature = source_data_signature(source_key)
+    if stored_signature.get("data_signature") != expected_data_signature:
+        return False
+    loaded_start_text = metadata.get("loaded_start_date") or stored_signature.get("start_date")
+    try:
+        loaded_start_date = date.fromisoformat(str(loaded_start_text))
+    except ValueError:
+        return False
+    return loaded_start_date <= requested_start_date
+
+
+def _atomic_write_text(path: Path, text_value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(
+        f"{path.name}.{os.getpid()}.{int(time.time() * 1000)}.tmp"
+    )
+    try:
+        temp_path.write_text(text_value, encoding="utf-8")
+        os.replace(str(temp_path), str(path))
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+
+def read_source_refresh_status(source_key: str) -> dict[str, Any] | None:
+    try:
+        path = source_status_path(source_key)
+        if not path.is_file():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def update_source_refresh_status(source_key: str, **updates: Any) -> None:
+    payload = read_source_refresh_status(source_key) or {}
+    payload.update(updates)
+    payload["source"] = source_key
+    payload["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+    payload.setdefault("pid", os.getpid())
+    try:
+        _atomic_write_text(
+            source_status_path(source_key),
+            json.dumps(payload, indent=2, default=str),
+        )
+    except Exception:
+        return
+
+
+def source_refresh_status_summary(source_key: str) -> str:
+    status = read_source_refresh_status(source_key) or {}
+    stage = str(status.get("stage", "refreshing"))
+    refresh_mode = str(status.get("refresh_mode", "refresh"))
+    chunk_index = int(status.get("chunk_index", 0) or 0)
+    chunks_total = int(status.get("chunks_total", 0) or 0)
+    chunk_start = status.get("chunk_start_date")
+    chunk_end = status.get("chunk_end_date_exclusive")
+    parts = [f"{source_key}: {refresh_mode} {stage}"]
+    if chunk_index and chunks_total:
+        parts.append(f"window {chunk_index} of {chunks_total}")
+    if chunk_start and chunk_end:
+        parts.append(f"{chunk_start} to {chunk_end}")
+    return "; ".join(parts)
+
+
+@contextmanager
+def source_refresh_lock(source_key: str) -> Any:
+    """Prevent duplicate refreshes of the same API source."""
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = source_lock_path(source_key)
+
+    if fcntl is not None:
+        handle = lock_path.open("a+", encoding="utf-8")
+        try:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+            handle.seek(0)
+            handle.truncate()
+            handle.write(
+                json.dumps(
+                    {
+                        "source": source_key,
+                        "pid": os.getpid(),
+                        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+            )
+            handle.flush()
+            yield True
+        finally:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            handle.close()
+        return
+
+    lock_fd: int | None = None
+    try:
+        try:
+            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            yield False
+            return
+        os.write(
+            lock_fd,
+            json.dumps(
+                {
+                    "source": source_key,
+                    "pid": os.getpid(),
+                    "started_at_utc": datetime.now(timezone.utc).isoformat(),
+                }
+            ).encode("utf-8"),
+        )
+        yield True
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def read_source_manifest(source_key: str) -> dict[str, Any] | None:
+    try:
+        path = source_manifest_path(source_key)
+        if not path.is_file():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def source_manifest_is_valid(
+    source_key: str,
+    manifest: dict[str, Any] | None,
+    requested_signature: dict[str, Any],
+    requested_start_date: date,
+) -> bool:
+    if not manifest:
+        return False
+    if manifest.get("snapshot_schema_version") != ATLAS_SNAPSHOT_SCHEMA_VERSION:
+        return False
+    if manifest.get("source") != source_key:
+        return False
+    metadata = manifest.get("metadata") or {}
+    stored_signature = manifest.get("signature") or {}
+    if not source_signature_covers_request(
+        stored_signature,
+        requested_signature,
+        metadata,
+        requested_start_date,
+    ):
+        return False
+    snapshot_file = SNAPSHOT_DIR / str(manifest.get("prepared_file", ""))
+    return bool(manifest.get("generation")) and snapshot_file.is_file()
+
+
+@st.cache_data(show_spinner=False)
+def cached_read_prepared_source_snapshot(
+    source_key: str,
+    generation: str,
+    snapshot_file: str,
+) -> pd.DataFrame:
+    del source_key, generation  # Deliberate cache keys.
+    return pd.read_parquet(snapshot_file)
+
+
+def load_source_snapshot(
+    source_key: str,
+    requested_signature: dict[str, Any],
+    requested_start_date: date,
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]] | None:
+    # Older call sites do not include source/data_signature in the requested signature.
+    requested_signature = dict(requested_signature or {})
+    requested_signature.setdefault("source", source_key)
+    requested_signature.setdefault("data_signature", source_data_signature(source_key))
+    manifest = read_source_manifest(source_key)
+    if not source_manifest_is_valid(
+        source_key,
+        manifest,
+        requested_signature,
+        requested_start_date,
+    ):
+        return None
+    assert manifest is not None
+    generation = str(manifest["generation"])
+    snapshot_path = SNAPSHOT_DIR / str(manifest["prepared_file"])
+    try:
+        df = cached_read_prepared_source_snapshot(
+            source_key,
+            generation,
+            str(snapshot_path),
+        )
+    except Exception:
+        return None
+    if not isinstance(df, pd.DataFrame):
+        return None
+    metadata = dict(manifest.get("metadata") or {})
+    metadata["loaded_from_snapshot"] = True
+    metadata["snapshot_generation"] = generation
+    metadata.setdefault("snapshot_saved_at_utc", manifest.get("saved_at_utc", "-"))
+    metadata.setdefault("snapshot_schema_version", ATLAS_SNAPSHOT_SCHEMA_VERSION)
+    return df, metadata, dict(manifest.get("signature") or {})
+
+
+def source_snapshot_info(
+    source_key: str,
+    username: str,
+    auth_method: str,
+    start_date: date,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    requested_signature = atlas_source_signature(
+        source_key,
+        username,
+        auth_method,
+        start_date,
+    )
+    manifest = read_source_manifest(source_key)
+    if not source_manifest_is_valid(
+        source_key,
+        manifest,
+        requested_signature,
+        start_date,
+    ):
+        return None
+    assert manifest is not None
+    return dict(manifest.get("metadata") or {}), manifest
+
+
+def build_refresh_windows(
+    start_date: date,
+    end_date_exclusive: date,
+    chunk_days: int,
+) -> list[tuple[date, date]]:
+    if start_date >= end_date_exclusive:
+        return []
+    windows: list[tuple[date, date]] = []
+    cursor = start_date
+    while cursor < end_date_exclusive:
+        next_cursor = min(cursor + timedelta(days=chunk_days), end_date_exclusive)
+        windows.append((cursor, next_cursor))
+        cursor = next_cursor
+    return windows
+
+
+def build_source_window_url(
+    source_key: str,
+    window_start: date,
+    window_end_exclusive: date,
+) -> str:
+    config = SOURCE_CONFIGS[source_key]
+    datetime_column = source_primary_datetime_column(source_key)
+    # Query one day earlier because Marorka's OData V1 filter uses strict gt.
+    query_start = window_start - timedelta(days=1)
+    filter_text = (
+        f"{datetime_column} gt DateTime'{query_start.isoformat()}' and "
+        f"{datetime_column} lt DateTime'{window_end_exclusive.isoformat()}'"
+    )
+    params: dict[str, str] = {"$filter": filter_text}
+    if source_key == "reportdata":
+        params["$select"] = ",".join(SOURCE_COLUMNS)
+    return f"{config['endpoint']}?{urlencode(params)}"
+
+
+def trim_frame_to_window(
+    df: pd.DataFrame,
+    datetime_column: str,
+    window_start: date,
+    window_end_exclusive: date,
+) -> pd.DataFrame:
+    if df.empty or datetime_column not in df.columns:
+        return df.iloc[0:0].copy()
+    values = parse_datetime_series(df[datetime_column])
+    start_ts = pd.Timestamp(window_start, tz="UTC")
+    end_ts = pd.Timestamp(window_end_exclusive, tz="UTC")
+    return df.loc[values.ge(start_ts) & values.lt(end_ts)].copy()
+
+
+def prepare_reportdata_snapshot_frame(df: pd.DataFrame) -> pd.DataFrame:
+    for column in SOURCE_COLUMNS:
+        if column not in df.columns:
+            df[column] = pd.NA
+    prepared = df[SOURCE_COLUMNS].copy()
+    prepared["ReportId"] = pd.to_numeric(prepared["ReportId"], errors="coerce").astype("Int64")
+    prepared["StartDateTimeGMT"] = parse_datetime_series(prepared["StartDateTimeGMT"])
+    prepared["EndDateTimeGMT"] = parse_datetime_series(prepared["EndDateTimeGMT"])
+    prepared["LapTime"] = parse_numeric_series(prepared["LapTime"])
+    prepared["ParsedValue"] = parse_numeric_series(prepared["ReportedValue"])
+    prepared = prepared[
+        prepared["ValueDescription"].notna()
+        & ~prepared["ReportType"].isin(EXCLUDED_REPORT_TYPES)
+    ].copy()
+    for column in ["ShipName", "ReportType", "StateName", "ValueDescription", "ReportedValue"]:
+        prepared[column] = prepared[column].astype("string")
+    return prepared[[*SOURCE_COLUMNS, "ParsedValue"]]
+
+
+def normalize_wide_snapshot_frame(source_key: str, df: pd.DataFrame) -> pd.DataFrame:
+    prepared = df.copy()
+    prepared.columns = [str(column) for column in prepared.columns]
+    if "__metadata" in prepared.columns:
+        prepared = prepared.drop(columns=["__metadata"])
+    datetime_column = source_primary_datetime_column(source_key)
+    for column in prepared.columns:
+        if column == datetime_column:
+            prepared[column] = parse_datetime_series(prepared[column])
+        else:
+            prepared[column] = prepared[column].astype("string")
+    return prepared
+
+
+def normalize_source_snapshot_frame(source_key: str, df: pd.DataFrame) -> pd.DataFrame:
+    if source_key == "reportdata":
+        return prepare_reportdata_snapshot_frame(df)
+    return normalize_wide_snapshot_frame(source_key, df)
+
+
+def deduplicate_source_window(source_key: str, df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if source_key == "reportdata":
+        report_ids = df["ReportId"].astype("string").fillna("")
+        value_keys = df["ValueDescription"].map(normalize_text)
+        with_id = df.loc[report_ids.str.len().gt(0)].copy()
+        if not with_id.empty:
+            with_id["_rid"] = report_ids.loc[with_id.index]
+            with_id["_value_key"] = value_keys.loc[with_id.index]
+            with_id = with_id.drop_duplicates(["_rid", "_value_key"], keep="last").drop(columns=["_rid", "_value_key"])
+        without_id = df.loc[report_ids.str.len().eq(0)].drop_duplicates(keep="last")
+        return pd.concat([with_id, without_id], ignore_index=True)
+    if "ReportId" in df.columns and df["ReportId"].notna().any():
+        return df.drop_duplicates(["ReportId"], keep="last").reset_index(drop=True)
+    datetime_column = source_primary_datetime_column(source_key)
+    keys = [column for column in ["ShipName", datetime_column] if column in df.columns]
+    if len(keys) == 2:
+        return df.drop_duplicates(keys, keep="last").reset_index(drop=True)
+    return df.drop_duplicates(keep="last").reset_index(drop=True)
+
+
+def fetch_source_window(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    window_start: date,
+    window_end_exclusive: date,
+    *,
+    deadline_monotonic: float,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    started_at = time.perf_counter()
+    next_url = build_source_window_url(source_key, window_start, window_end_exclusive)
+    first_url = next_url
+    seen_urls: set[str] = set()
+    frames: list[pd.DataFrame] = []
+    pages = 0
+    total_bytes = 0
+    scanned_rows = 0
+    consecutive_empty_pages = 0
+    paging_stop_reason = "max_page_limit"
+    auth = request_auth(username, password, auth_method)
+    headers = request_headers(token, auth_method)
+    datetime_column = source_primary_datetime_column(source_key)
+
+    with requests.Session() as session:
+        session.headers.update(headers)
+        for _ in range(MAX_ODATA_PAGES):
+            if time.perf_counter() >= deadline_monotonic:
+                raise TimeoutError(f"{SOURCE_CONFIGS[source_key]['label']} refresh exceeded its safety time limit.")
+            if next_url in seen_urls:
+                paging_stop_reason = "repeated_current_url"
+                break
+            seen_urls.add(next_url)
+            response = request_with_retry(
+                session,
+                next_url,
+                auth=auth,
+                timeout=API_REQUEST_TIMEOUT_SECONDS,
+                max_attempts=API_REQUEST_MAX_ATTEMPTS,
+            )
+            total_bytes += len(response.content)
+            response.raise_for_status()
+            pages += 1
+            page_rows, next_link = extract_odata_page(response.json())
+            scanned_rows += len(page_rows)
+            consecutive_empty_pages = consecutive_empty_pages + 1 if len(page_rows) == 0 else 0
+
+            if source_key == "reportdata":
+                page_rows = compact_odata_rows(page_rows)
+            page_df = pd.DataFrame(page_rows)
+            if not page_df.empty:
+                if source_key == "reportdata":
+                    for column in SOURCE_COLUMNS:
+                        if column not in page_df.columns:
+                            page_df[column] = pd.NA
+                    page_df = page_df[SOURCE_COLUMNS]
+                page_df = trim_frame_to_window(
+                    page_df,
+                    datetime_column,
+                    window_start,
+                    window_end_exclusive,
+                )
+                if not page_df.empty:
+                    frames.append(page_df)
+
+            should_continue, resolved_next_url, stop_reason = should_continue_odata_paging(
+                current_url=next_url,
+                next_link=next_link,
+                seen_urls=seen_urls,
+                consecutive_empty_pages=consecutive_empty_pages,
+            )
+            if not should_continue:
+                paging_stop_reason = stop_reason or "end_of_feed"
+                break
+            next_url = resolved_next_url or next_url
+
+    hit_page_limit = pages >= MAX_ODATA_PAGES and paging_stop_reason == "max_page_limit"
+    if hit_page_limit:
+        raise RuntimeError(
+            f"{SOURCE_CONFIGS[source_key]['label']} reached {MAX_ODATA_PAGES:,} pages inside "
+            f"the bounded window {window_start} to {window_end_exclusive}. Reduce the configured chunk size."
+        )
+
+    if frames:
+        window_df = pd.concat(frames, ignore_index=True, sort=False)
+    elif source_key == "reportdata":
+        window_df = pd.DataFrame(columns=SOURCE_COLUMNS)
+    else:
+        window_df = pd.DataFrame()
+    window_df = normalize_source_snapshot_frame(source_key, window_df)
+    window_df = deduplicate_source_window(source_key, window_df)
+
+    date_values = (
+        pd.to_datetime(window_df.get(datetime_column), errors="coerce", utc=True)
+        if datetime_column in window_df.columns
+        else pd.Series(dtype="datetime64[ns, UTC]")
+    )
+    metadata = {
+        "window_start_date": window_start.isoformat(),
+        "window_end_date_exclusive": window_end_exclusive.isoformat(),
+        "rows": int(len(window_df)),
+        "scanned_rows": int(scanned_rows),
+        "pages": int(pages),
+        "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
+        "fetch_seconds": round(time.perf_counter() - started_at, 2),
+        "first_url": first_url,
+        "paging_stop_reason": paging_stop_reason,
+        "hit_page_limit": False,
+        "latest_source_date": date_values.max().date().isoformat() if not date_values.empty and date_values.notna().any() else None,
+    }
+    return window_df, metadata
+
+
+def write_temp_chunk(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, index=False, compression="zstd")
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise RuntimeError(f"Temporary snapshot chunk was not created: {path}")
+
+
+def collect_source_chunks(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    refresh_start_date: date,
+    end_date_exclusive: date,
+    chunk_days: int,
+    max_duration_seconds: int,
+    refresh_mode: str,
+) -> tuple[Path, list[Path], list[str], dict[str, Any]]:
+    work_dir = SNAPSHOT_DIR / f".refresh_{source_key}_{os.getpid()}_{int(time.time() * 1000)}"
+    work_dir.mkdir(parents=True, exist_ok=False)
+    windows = build_refresh_windows(refresh_start_date, end_date_exclusive, chunk_days)
+    deadline = time.perf_counter() + max_duration_seconds
+    chunk_files: list[Path] = []
+    union_columns: list[str] = []
+    total_rows = total_scanned = total_pages = 0
+    total_downloaded_mb = total_fetch_seconds = 0.0
+    first_url = "-"
+    latest_source_date: str | None = None
+
+    for index, (window_start, window_end) in enumerate(windows, start=1):
+        update_source_refresh_status(
+            source_key,
+            state="running",
+            stage="fetching",
+            refresh_mode=refresh_mode,
+            chunk_index=index,
+            chunks_total=len(windows),
+            chunk_start_date=window_start.isoformat(),
+            chunk_end_date_exclusive=window_end.isoformat(),
+            pages_completed=total_pages,
+            rows_kept=total_rows,
+        )
+        frame, window_meta = fetch_source_window(
+            source_key,
+            username,
+            password,
+            token,
+            auth_method,
+            window_start,
+            window_end,
+            deadline_monotonic=deadline,
+        )
+        chunk_path = work_dir / f"chunk_{index:04d}.parquet"
+        write_temp_chunk(frame, chunk_path)
+        chunk_files.append(chunk_path)
+        for column in frame.columns:
+            if column not in union_columns:
+                union_columns.append(str(column))
+        total_rows += len(frame)
+        total_scanned += int(window_meta["scanned_rows"])
+        total_pages += int(window_meta["pages"])
+        total_downloaded_mb += float(window_meta["downloaded_mb"])
+        total_fetch_seconds += float(window_meta["fetch_seconds"])
+        if first_url == "-":
+            first_url = str(window_meta.get("first_url", "-"))
+        latest_value = window_meta.get("latest_source_date")
+        if latest_value and (latest_source_date is None or str(latest_value) > latest_source_date):
+            latest_source_date = str(latest_value)
+        del frame
+        gc.collect()
+
+    metadata = {
+        "refresh_mode": refresh_mode,
+        "refresh_api_start_date": refresh_start_date.isoformat(),
+        "refresh_end_date_exclusive": end_date_exclusive.isoformat(),
+        "chunk_days": int(chunk_days),
+        "chunks_total": len(windows),
+        "chunks_completed": len(chunk_files),
+        "refresh_rows": int(total_rows),
+        "scanned_rows": int(total_scanned),
+        "discarded_rows": max(int(total_scanned) - int(total_rows), 0),
+        "pages": int(total_pages),
+        "downloaded_mb": round(total_downloaded_mb, 2),
+        "fetch_seconds": round(total_fetch_seconds, 2),
+        "prepare_seconds": 0,
+        "first_url": first_url,
+        "paging_stop_reason": "all_windows_completed",
+        "hit_page_limit": False,
+        "max_pages": MAX_ODATA_PAGES,
+        "max_pages_per_window": MAX_ODATA_PAGES,
+        "latest_source_date": latest_source_date,
+    }
+    return work_dir, chunk_files, union_columns, metadata
+
+
+def source_snapshot_columns(source_key: str, existing_path: Path | None, fresh_columns: list[str]) -> list[str]:
+    if source_key == "reportdata":
+        return [*SOURCE_COLUMNS, "ParsedValue"]
+    columns: list[str] = []
+    if existing_path is not None and existing_path.is_file():
+        try:
+            for column in pq.ParquetFile(existing_path).schema.names:
+                if column not in columns:
+                    columns.append(column)
+        except Exception:
+            pass
+    for column in fresh_columns:
+        if column not in columns:
+            columns.append(column)
+    datetime_column = source_primary_datetime_column(source_key)
+    if datetime_column not in columns:
+        columns.insert(0, datetime_column)
+    return columns or [datetime_column]
+
+
+def source_arrow_schema(source_key: str, columns: list[str]) -> pa.Schema:
+    if source_key == "reportdata":
+        float_columns = {"LapTime", "ParsedValue"}
+        datetime_columns = {"StartDateTimeGMT", "EndDateTimeGMT"}
+        fields = []
+        for column in columns:
+            if column == "ReportId":
+                field_type = pa.int64()
+            elif column in float_columns:
+                field_type = pa.float64()
+            elif column in datetime_columns:
+                field_type = pa.timestamp("ns", tz="UTC")
+            else:
+                field_type = pa.string()
+            fields.append(pa.field(column, field_type, nullable=True))
+        return pa.schema(fields)
+
+    datetime_column = source_primary_datetime_column(source_key)
+    return pa.schema(
+        [
+            pa.field(
+                column,
+                pa.timestamp("ns", tz="UTC") if column == datetime_column else pa.string(),
+                nullable=True,
+            )
+            for column in columns
+        ]
+    )
+
+
+def align_source_frame(
+    source_key: str,
+    frame: pd.DataFrame,
+    columns: list[str],
+) -> pd.DataFrame:
+    aligned = frame.copy()
+    for column in columns:
+        if column not in aligned.columns:
+            aligned[column] = pd.NA
+    aligned = aligned[columns]
+    if source_key == "reportdata":
+        aligned["ReportId"] = pd.to_numeric(aligned["ReportId"], errors="coerce").astype("Int64")
+        for column in ["StartDateTimeGMT", "EndDateTimeGMT"]:
+            aligned[column] = pd.to_datetime(aligned[column], errors="coerce", utc=True)
+        for column in ["LapTime", "ParsedValue"]:
+            aligned[column] = pd.to_numeric(aligned[column], errors="coerce")
+        for column in columns:
+            if column not in {"ReportId", "StartDateTimeGMT", "EndDateTimeGMT", "LapTime", "ParsedValue"}:
+                aligned[column] = aligned[column].astype("string")
+        return aligned
+
+    datetime_column = source_primary_datetime_column(source_key)
+    for column in columns:
+        if column == datetime_column:
+            aligned[column] = pd.to_datetime(aligned[column], errors="coerce", utc=True)
+        else:
+            aligned[column] = aligned[column].astype("string")
+    return aligned
+
+
+def append_frame_to_parquet_writer(
+    writer: pq.ParquetWriter,
+    source_key: str,
+    frame: pd.DataFrame,
+    columns: list[str],
+    schema: pa.Schema,
+) -> int:
+    if frame.empty:
+        return 0
+    aligned = align_source_frame(source_key, frame, columns)
+    table = pa.Table.from_pandas(aligned, schema=schema, preserve_index=False)
+    writer.write_table(table)
+    return int(len(aligned))
+
+
+def stream_existing_snapshot_before_cutoff(
+    writer: pq.ParquetWriter,
+    source_key: str,
+    existing_path: Path,
+    cutoff_date: date,
+    columns: list[str],
+    schema: pa.Schema,
+) -> int:
+    row_count = 0
+    datetime_column = source_primary_datetime_column(source_key)
+    cutoff_ts = pd.Timestamp(cutoff_date, tz="UTC")
+    parquet_file = pq.ParquetFile(existing_path)
+    for batch in parquet_file.iter_batches(batch_size=25000):
+        frame = batch.to_pandas()
+        if datetime_column in frame.columns:
+            dates = pd.to_datetime(frame[datetime_column], errors="coerce", utc=True)
+            frame = frame.loc[dates.isna() | dates.lt(cutoff_ts)].copy()
+        row_count += append_frame_to_parquet_writer(
+            writer,
+            source_key,
+            frame,
+            columns,
+            schema,
+        )
+        del frame
+        gc.collect()
+    return row_count
+
+
+def stream_chunk_file(
+    writer: pq.ParquetWriter,
+    source_key: str,
+    chunk_path: Path,
+    columns: list[str],
+    schema: pa.Schema,
+) -> int:
+    row_count = 0
+    parquet_file = pq.ParquetFile(chunk_path)
+    for batch in parquet_file.iter_batches(batch_size=25000):
+        frame = batch.to_pandas()
+        row_count += append_frame_to_parquet_writer(
+            writer,
+            source_key,
+            frame,
+            columns,
+            schema,
+        )
+        del frame
+        gc.collect()
+    return row_count
+
+
+def source_snapshot_latest_date(source_key: str, snapshot_path: Path) -> date | None:
+    datetime_column = source_primary_datetime_column(source_key)
+    try:
+        parquet_file = pq.ParquetFile(snapshot_path)
+        if datetime_column not in parquet_file.schema.names:
+            return None
+        latest: pd.Timestamp | None = None
+        for batch in parquet_file.iter_batches(columns=[datetime_column], batch_size=100000):
+            values = pd.to_datetime(batch.column(0).to_pandas(), errors="coerce", utc=True)
+            if values.notna().any():
+                batch_max = values.max()
+                if latest is None or batch_max > latest:
+                    latest = batch_max
+        return latest.date() if latest is not None else None
+    except Exception:
+        return None
+
+
+def snapshot_generation() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + f"-{os.getpid()}"
+
+
+def cleanup_old_source_generations(source_key: str) -> None:
+    try:
+        files = sorted(
+            SNAPSHOT_DIR.glob(f"{source_key}_prepared_*.parquet"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for path in files[ATLAS_SNAPSHOT_GENERATIONS_TO_KEEP:]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        for temp_path in SNAPSHOT_DIR.glob(f".refresh_{source_key}_*"):
+            try:
+                if temp_path.is_dir() and time.time() - temp_path.stat().st_mtime > 3600:
+                    for child in temp_path.iterdir():
+                        child.unlink(missing_ok=True)
+                    temp_path.rmdir()
+            except OSError:
+                pass
+    except Exception:
+        return
+
+
+def cleanup_legacy_source_files(source_key: str) -> None:
+    """Remove superseded fixed-name snapshots only after a new manifest is live."""
+    try:
+        config = SOURCE_CONFIGS[source_key]
+        for key in ["snapshot_file", "metadata_file"]:
+            legacy_path = Path(config[key])
+            if legacy_path.is_file():
+                legacy_path.unlink()
+    except OSError:
+        pass
+
+
+def publish_source_snapshot(
+    source_key: str,
+    existing_manifest: dict[str, Any] | None,
+    refresh_start_date: date,
+    work_dir: Path,
+    chunk_files: list[Path],
+    fresh_columns: list[str],
+    refresh_metadata: dict[str, Any],
+    signature: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    existing_path: Path | None = None
+    if existing_manifest is not None:
+        candidate = SNAPSHOT_DIR / str(existing_manifest.get("prepared_file", ""))
+        if candidate.is_file():
+            existing_path = candidate
+
+    columns = source_snapshot_columns(source_key, existing_path, fresh_columns)
+    schema = source_arrow_schema(source_key, columns)
+    generation = snapshot_generation()
+    final_path = source_snapshot_path(source_key, generation)
+    temp_path = final_path.with_name(f"{final_path.name}.tmp")
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = pq.ParquetWriter(temp_path, schema, compression="zstd")
+    total_rows = 0
+    try:
+        if existing_path is not None:
+            total_rows += stream_existing_snapshot_before_cutoff(
+                writer,
+                source_key,
+                existing_path,
+                refresh_start_date,
+                columns,
+                schema,
+            )
+        for chunk_path in chunk_files:
+            total_rows += stream_chunk_file(
+                writer,
+                source_key,
+                chunk_path,
+                columns,
+                schema,
+            )
+    finally:
+        writer.close()
+
+    try:
+        if not temp_path.is_file() or temp_path.stat().st_size <= 0:
+            raise RuntimeError(f"{SOURCE_CONFIGS[source_key]['label']} prepared snapshot was not created.")
+        os.replace(str(temp_path), str(final_path))
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+    latest_date = source_snapshot_latest_date(source_key, final_path)
+    loaded_at_utc = datetime.now(timezone.utc)
+    metadata = dict(refresh_metadata)
+    metadata.update(
+        {
+            "source": SOURCE_CONFIGS[source_key]["label"],
+            "endpoint": str(SOURCE_CONFIGS[source_key]["endpoint"]),
+            "loaded_at_utc": loaded_at_utc.strftime("%d-%m-%Y %H:%M:%S UTC"),
+            "loaded_at_local": local_time_label(loaded_at_utc),
+            "loaded_start_date": API_FULL_START_DATE.isoformat(),
+            "rows": int(total_rows),
+            "kept_rows": int(total_rows),
+            "columns": int(len(columns)),
+            "snapshot_generation": generation,
+            "snapshot_format": "prepared_parquet",
+            "snapshot_schema_version": ATLAS_SNAPSHOT_SCHEMA_VERSION,
+            "latest_source_date": latest_date.isoformat() if latest_date else refresh_metadata.get("latest_source_date"),
+        }
+    )
+    saved_at_utc = loaded_at_utc.strftime("%d-%m-%Y %H:%M:%S UTC")
+    manifest = {
+        "snapshot_schema_version": ATLAS_SNAPSHOT_SCHEMA_VERSION,
+        "source": source_key,
+        "generation": generation,
+        "prepared_file": final_path.name,
+        "signature": signature,
+        "metadata": metadata,
+        "saved_at_utc": saved_at_utc,
+    }
+    _atomic_write_text(
+        source_manifest_path(source_key),
+        json.dumps(manifest, indent=2, default=str),
+    )
+
+    cached_read_prepared_source_snapshot.clear()
+    if source_key == "reportdata":
+        cached_prepare_long_data.clear()
+        build_pivot_table.clear()
+    else:
+        clear_wide_source_state(source_key)
+    cleanup_old_source_generations(source_key)
+    cleanup_legacy_source_files(source_key)
+    update_source_refresh_status(
+        source_key,
+        state="complete",
+        stage="published",
+        refresh_mode=metadata.get("refresh_mode"),
+        rows_kept=total_rows,
+        snapshot_generation=generation,
+    )
+    return metadata, manifest
+
+
+def remove_refresh_work_dir(work_dir: Path | None) -> None:
+    if work_dir is None:
+        return
+    try:
+        if work_dir.is_dir():
+            for child in work_dir.iterdir():
+                try:
+                    child.unlink()
+                except OSError:
+                    pass
+            work_dir.rmdir()
+    except OSError:
+        pass
+
+
+def refresh_source_snapshot(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    *,
+    full_refresh: bool,
+    acquire_lock: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if source_key not in SOURCE_CONFIGS:
+        raise ValueError(f"Unsupported AtlasFlow source: {source_key}")
+
+    requested_signature = atlas_source_signature(
+        source_key,
+        username,
+        auth_method,
+        API_FULL_START_DATE,
+    )
+
+    def execute_refresh() -> tuple[dict[str, Any], dict[str, Any]]:
+        existing_manifest = read_source_manifest(source_key)
+        if not source_manifest_is_valid(
+            source_key,
+            existing_manifest,
+            requested_signature,
+            API_FULL_START_DATE,
+        ):
+            existing_manifest = None
+
+        refresh_mode = "full"
+        refresh_start_date = API_FULL_START_DATE
+        if not full_refresh and existing_manifest is not None:
+            existing_path = SNAPSHOT_DIR / str(existing_manifest["prepared_file"])
+            latest_date_text = (existing_manifest.get("metadata") or {}).get("latest_source_date")
+            try:
+                latest_date = date.fromisoformat(str(latest_date_text)) if latest_date_text else None
+            except ValueError:
+                latest_date = None
+            if latest_date is None:
+                latest_date = source_snapshot_latest_date(source_key, existing_path)
+            if latest_date is not None:
+                overlap_days = read_int_secret(
+                    source_secret_name(source_key, "INCREMENTAL_OVERLAP_DAYS"),
+                    DEFAULT_SOURCE_OVERLAP_DAYS[source_key],
+                    minimum=1,
+                    maximum=90,
+                )
+                refresh_start_date = max(API_FULL_START_DATE, latest_date - timedelta(days=overlap_days))
+                refresh_mode = "incremental"
+
+        chunk_days = read_int_secret(
+            source_secret_name(source_key, "REFRESH_CHUNK_DAYS"),
+            DEFAULT_SOURCE_CHUNK_DAYS[source_key],
+            minimum=1,
+            maximum=62,
+        )
+        default_minutes = (
+            DEFAULT_SOURCE_FULL_REFRESH_MAX_MINUTES[source_key]
+            if refresh_mode == "full"
+            else DEFAULT_SOURCE_INCREMENTAL_REFRESH_MAX_MINUTES[source_key]
+        )
+        max_minutes = read_int_secret(
+            source_secret_name(
+                source_key,
+                "FULL_REFRESH_MAX_MINUTES" if refresh_mode == "full" else "INCREMENTAL_REFRESH_MAX_MINUTES",
+            ),
+            default_minutes,
+            minimum=5,
+            maximum=720,
+        )
+        end_date_exclusive = date.today() + timedelta(days=1)
+        work_dir: Path | None = None
+        try:
+            update_source_refresh_status(
+                source_key,
+                state="running",
+                stage="starting",
+                refresh_mode=refresh_mode,
+                refresh_start_date=refresh_start_date.isoformat(),
+                end_date_exclusive=end_date_exclusive.isoformat(),
+                chunk_days=chunk_days,
+                max_minutes=max_minutes,
+            )
+            work_dir, chunk_files, fresh_columns, refresh_metadata = collect_source_chunks(
+                source_key,
+                username,
+                password,
+                token,
+                auth_method,
+                refresh_start_date,
+                end_date_exclusive,
+                chunk_days,
+                max_minutes * 60,
+                refresh_mode,
+            )
+            if (
+                int(refresh_metadata.get("scanned_rows", 0) or 0) == 0
+                or int(refresh_metadata.get("refresh_rows", 0) or 0) == 0
+            ):
+                if existing_manifest is not None:
+                    metadata = dict(existing_manifest.get("metadata") or {})
+                    metadata.update(
+                        {
+                            "refresh_mode": "no_changes",
+                            "refresh_api_start_date": refresh_start_date.isoformat(),
+                            "refresh_checked_at_local": local_time_label(),
+                        }
+                    )
+                    update_source_refresh_status(source_key, state="complete", stage="no_changes", refresh_mode="no_changes")
+                    return metadata, existing_manifest
+                raise RuntimeError(f"{SOURCE_CONFIGS[source_key]['label']} returned zero usable rows during initial bootstrap.")
+
+            update_source_refresh_status(
+                source_key,
+                state="running",
+                stage="publishing",
+                refresh_mode=refresh_mode,
+                pages_completed=int(refresh_metadata.get("pages", 0) or 0),
+                rows_kept=int(refresh_metadata.get("refresh_rows", 0) or 0),
+            )
+            metadata, manifest = publish_source_snapshot(
+                source_key,
+                existing_manifest if refresh_mode == "incremental" else None,
+                refresh_start_date,
+                work_dir,
+                chunk_files,
+                fresh_columns,
+                refresh_metadata,
+                requested_signature,
+            )
+            return metadata, manifest
+        except Exception as exc:
+            update_source_refresh_status(
+                source_key,
+                state="failed",
+                stage="failed",
+                refresh_mode=refresh_mode,
+                error=str(exc),
+            )
+            raise
+        finally:
+            remove_refresh_work_dir(work_dir)
+
+    if not acquire_lock:
+        return execute_refresh()
+
+    with source_refresh_lock(source_key) as lock_acquired:
+        if not lock_acquired:
+            existing = source_snapshot_info(source_key, username, auth_method, API_FULL_START_DATE)
+            if existing is not None:
+                metadata, manifest = existing
+                metadata = dict(metadata)
+                metadata["refresh_skipped_due_to_lock"] = True
+                metadata["refresh_status"] = source_refresh_status_summary(source_key)
+                return metadata, manifest
+            raise AtlasRefreshAlreadyRunning(source_refresh_status_summary(source_key))
+        return execute_refresh()
+
+
+def migrate_legacy_source_snapshot(
+    source_key: str,
+    username: str,
+    auth_method: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    config = SOURCE_CONFIGS[source_key]
+    legacy_file = Path(config["snapshot_file"])
+    legacy_metadata_file = Path(config["metadata_file"])
+    if not legacy_file.is_file() or not legacy_metadata_file.is_file():
+        return None
+    try:
+        legacy_df = pd.read_parquet(legacy_file)
+        if source_key == "reportdata":
+            prepared = prepare_reportdata_snapshot_frame(legacy_df)
+        else:
+            prepared = normalize_wide_snapshot_frame(source_key, legacy_df)
+        if prepared.empty:
+            return None
+        work_dir = SNAPSHOT_DIR / f".refresh_{source_key}_migration_{os.getpid()}_{int(time.time() * 1000)}"
+        work_dir.mkdir(parents=True, exist_ok=False)
+        chunk_path = work_dir / "chunk_0001.parquet"
+        write_temp_chunk(prepared, chunk_path)
+        signature = atlas_source_signature(source_key, username, auth_method, API_FULL_START_DATE)
+        metadata = {
+            "refresh_mode": "legacy_migration",
+            "refresh_api_start_date": API_FULL_START_DATE.isoformat(),
+            "refresh_end_date_exclusive": (date.today() + timedelta(days=1)).isoformat(),
+            "chunk_days": 0,
+            "chunks_total": 1,
+            "chunks_completed": 1,
+            "refresh_rows": int(len(prepared)),
+            "scanned_rows": int(len(prepared)),
+            "pages": 0,
+            "downloaded_mb": 0,
+            "fetch_seconds": 0,
+            "first_url": "legacy_snapshot",
+            "paging_stop_reason": "legacy_migration",
+            "hit_page_limit": False,
+            "latest_source_date": None,
+        }
+        published = publish_source_snapshot(
+            source_key,
+            None,
+            API_FULL_START_DATE,
+            work_dir,
+            [chunk_path],
+            list(prepared.columns),
+            metadata,
+            signature,
+        )
+        remove_refresh_work_dir(work_dir)
+        return published
+    except Exception:
+        return None
+
+
+def ensure_source_snapshot(
+    source_key: str,
+    username: str,
+    auth_method: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    existing = source_snapshot_info(source_key, username, auth_method, API_FULL_START_DATE)
+    if existing is not None:
+        return existing
+    with source_refresh_lock(source_key) as lock_acquired:
+        if not lock_acquired:
+            return source_snapshot_info(source_key, username, auth_method, API_FULL_START_DATE)
+        existing = source_snapshot_info(source_key, username, auth_method, API_FULL_START_DATE)
+        if existing is not None:
+            return existing
+        return migrate_legacy_source_snapshot(source_key, username, auth_method)
+
+
+def parse_wide_source_datetimes(df: pd.DataFrame) -> pd.DataFrame:
+    """Prepared snapshots already type the primary filter datetime column."""
+    if df.empty:
+        return df
+    parsed_df = df
+    for column in parsed_df.columns:
+        if pd.api.types.is_datetime64_any_dtype(parsed_df[column]):
+            continue
+        lower = str(column).lower()
+        if "datetime" in lower or lower in {"date", "timestamp"}:
+            parsed = parse_datetime_series(parsed_df[column])
+            if parsed.notna().any():
+                if parsed_df is df:
+                    parsed_df = df.copy()
+                parsed_df[column] = parsed
+    return parsed_df
+
+
+def get_loaded_state() -> tuple[pd.DataFrame | None, pd.DataFrame | None, dict[str, Any] | None]:
+    return (
+        None,
+        st.session_state.get("loaded_long_df"),
+        st.session_state.get("loaded_metadata"),
+    )
+
+
+def activate_reportdata_snapshot(
+    username: str,
+    auth_method: str,
+    start_date: date,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    signature = atlas_source_signature("reportdata", username, auth_method, start_date)
+    snapshot = load_source_snapshot("reportdata", signature, start_date)
+    if snapshot is None:
+        raise FileNotFoundError("The prepared ReportData snapshot could not be loaded.")
+    long_df, metadata, snapshot_signature = snapshot
+    st.session_state.pop("loaded_raw_df", None)
+    st.session_state["loaded_long_df"] = long_df
+    st.session_state["loaded_metadata"] = dict(metadata)
+    st.session_state["loaded_request_signature"] = snapshot_signature
+    st.session_state["loaded_prepare_signature"] = source_data_signature("reportdata")
+    st.session_state["loaded_reportdata_generation"] = metadata.get("snapshot_generation")
+    return pd.DataFrame(), long_df, metadata
+
+
+def load_or_fetch_source(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    start_date: date,
+    refresh: bool,
+    auto_fetch: bool = False,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    del auto_fetch
+    requested_signature = atlas_source_signature(source_key, username, auth_method, start_date)
+    state_df_key = f"loaded_{source_key}_df"
+    state_meta_key = f"loaded_{source_key}_metadata"
+    state_sig_key = f"loaded_{source_key}_signature"
+    state_generation_key = f"loaded_{source_key}_generation"
+
+    if refresh:
+        refresh_source_snapshot(
+            source_key,
+            username,
+            password,
+            token,
+            auth_method,
+            full_refresh=False,
+        )
+
+    manifest = read_source_manifest(source_key)
+    current_generation = manifest.get("generation") if isinstance(manifest, dict) else None
+    df = st.session_state.get(state_df_key)
+    metadata = st.session_state.get(state_meta_key)
+    current_signature = st.session_state.get(state_sig_key)
+    session_generation = st.session_state.get(state_generation_key)
+    session_ready = (
+        isinstance(df, pd.DataFrame)
+        and isinstance(metadata, dict)
+        and source_signature_covers_request(current_signature, requested_signature, metadata, start_date)
+        and session_generation == current_generation
+    )
+    if session_ready:
+        return df, metadata
+
+    snapshot = load_source_snapshot(source_key, requested_signature, start_date)
+    if snapshot is None:
+        migrated = ensure_source_snapshot(source_key, username, auth_method)
+        if migrated is not None:
+            snapshot = load_source_snapshot(source_key, requested_signature, start_date)
+    if snapshot is None:
+        config = SOURCE_CONFIGS[source_key]
+        return pd.DataFrame(), {
+            "source": config["label"],
+            "endpoint": str(config["endpoint"]),
+            "loaded_at_utc": "-",
+            "loaded_at_local": "No prepared snapshot yet",
+            "loaded_from_snapshot": False,
+            "rows": 0,
+            "columns": 0,
+            "pages": 0,
+            "first_url": "-",
+            "needs_warmup": True,
+        }
+
+    df, metadata, snapshot_signature = snapshot
+    st.session_state[state_df_key] = df
+    st.session_state[state_meta_key] = metadata
+    st.session_state[state_sig_key] = snapshot_signature
+    st.session_state[state_generation_key] = metadata.get("snapshot_generation")
+    return df, metadata
+
+
+def load_raw_snapshot(
+    requested_signature: dict[str, Any],
+    requested_start_date: date,
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]] | None:
+    requested_signature = dict(requested_signature or {})
+    requested_signature.setdefault("source", "reportdata")
+    requested_signature.setdefault("data_signature", source_data_signature("reportdata"))
+    return load_source_snapshot("reportdata", requested_signature, requested_start_date)
+
+
+def refresh_all_atlasflow_snapshots(
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    start_date: date,
+) -> dict[str, dict[str, Any]]:
+    del start_date
+    results: dict[str, dict[str, Any]] = {}
+    errors: dict[str, str] = {}
+    for source_key in ["reportdata", "reportpivots", "shippivots"]:
+        try:
+            metadata, _ = refresh_source_snapshot(
+                source_key,
+                username,
+                password,
+                token,
+                auth_method,
+                full_refresh=False,
+            )
+            results[source_key] = metadata
+        except Exception as exc:
+            errors[source_key] = str(exc)
+        finally:
+            gc.collect()
+    if errors:
+        raise RuntimeError(
+            "AtlasFlow source refresh failures: "
+            + "; ".join(f"{key}: {value}" for key, value in errors.items())
+        )
+    cached_fetch_report_data.clear()
+    cached_fetch_wide_odata_source.clear()
+    activate_reportdata_snapshot(username, auth_method, API_FULL_START_DATE)
+    return results
+
+
 # =============================================================================
 # Warmup
 # =============================================================================
 
 
 def run_warmup_if_requested() -> None:
+    """Build or incrementally refresh one or all prepared AtlasFlow snapshots."""
     if not is_warmup_request():
         return
 
@@ -3722,95 +5144,104 @@ def run_warmup_if_requested() -> None:
     password = read_secret("MARORKA_PASSWORD")
     token = read_secret("MARORKA_TOKEN")
     auth_method = read_secret("MARORKA_AUTH_METHOD", "basic")
-    start_date = API_FULL_START_DATE
     requested_source = get_query_param("source", "reportdata").strip().lower()
+    force_refresh = get_query_param("force", "0") == "1"
+    full_refresh = get_query_param("full", "0") == "1"
 
     if auth_method.lower() in {"basic", "digest"} and (not username or not password):
         st.error("Warmup failed: MARORKA_USERNAME and MARORKA_PASSWORD are required.")
         st.stop()
 
-    valid_sources = {"reportdata", "reportpivots", "shippivots"}
+    valid_sources = ["reportdata", "reportpivots", "shippivots"]
     if requested_source == "all":
-        st.error(
-            "source=all is disabled on Streamlit Cloud to avoid memory limits. "
-            "Warm up reportdata, reportpivots, and shippivots one at a time."
-        )
-        st.stop()
-    if requested_source not in valid_sources:
-        st.error("Invalid warmup source. Use reportdata, reportpivots, or shippivots.")
+        requested_sources = valid_sources
+    elif requested_source in valid_sources:
+        requested_sources = [requested_source]
+    else:
+        st.error("Invalid warmup source. Use reportdata, reportpivots, shippivots, or all.")
         st.stop()
 
-    force_refresh = get_query_param("force", "0") == "1"
+    warmup_started_at = time.perf_counter()
+    results: dict[str, dict[str, Any]] = {}
+    failures: dict[str, str] = {}
 
-    try:
-        with st.spinner(f"Warming up AtlasFlow source: {requested_source}..."):
-            if requested_source == "reportdata":
-                signature = request_signature(username, auth_method, start_date)
-                snapshot = None if force_refresh else load_raw_snapshot(signature, start_date)
-                if snapshot is None:
-                    metadata = fetch_report_data_to_snapshot(
-                        username, password, token, auth_method, start_date
-                    )
-                else:
-                    _, metadata, _ = snapshot
-
-                # The API is fetched at most once. After success, seed the shared
-                # prepared-data cache from the snapshot used by normal app sessions.
-                cached_fetch_report_data.clear()
-                _, long_df, metadata = activate_reportdata_snapshot(
-                    username, auth_method, start_date
-                )
-                metadata = metadata.copy()
-                metadata["long_rows"] = int(len(long_df))
-            else:
-                signature = source_signature(
-                    requested_source, username, auth_method, start_date
-                )
-                snapshot = None if force_refresh else load_source_snapshot(
-                    requested_source, signature, start_date
-                )
-                if snapshot is None:
-                    metadata = fetch_wide_source_to_snapshot(
-                        requested_source,
+    for source_key in requested_sources:
+        try:
+            if force_refresh:
+                with st.spinner(f"Refreshing and preparing {SOURCE_CONFIGS[source_key]['label']}..."):
+                    metadata, manifest = refresh_source_snapshot(
+                        source_key,
                         username,
                         password,
                         token,
                         auth_method,
-                        start_date,
+                        full_refresh=full_refresh,
                     )
+            else:
+                existing = ensure_source_snapshot(source_key, username, auth_method)
+                if existing is None:
+                    with st.spinner(f"Creating the first prepared {SOURCE_CONFIGS[source_key]['label']} snapshot..."):
+                        metadata, manifest = refresh_source_snapshot(
+                            source_key,
+                            username,
+                            password,
+                            token,
+                            auth_method,
+                            full_refresh=True,
+                        )
                 else:
-                    _, metadata, _ = snapshot
+                    metadata, manifest = existing
 
-                cached_fetch_wide_odata_source.clear()
-                clear_wide_source_state(requested_source)
-                gc.collect()
-    except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else "unknown"
-        st.error(f"Warmup failed: Marorka API request failed with status {status}.")
-        st.stop()
-    except (
-        MarorkaConfigError,
-        ValueError,
-        FileNotFoundError,
-        RuntimeError,
-        requests.RequestException,
-    ) as exc:
-        st.error(f"Warmup failed: {exc}")
-        st.stop()
+            # ReportData is used by the default workspace, so seed its shared read cache.
+            if source_key == "reportdata":
+                signature = atlas_source_signature(source_key, username, auth_method, API_FULL_START_DATE)
+                load_source_snapshot(source_key, signature, API_FULL_START_DATE)
 
-    st.success("Warmup OK.")
-    st.write(
-        {
-            "source": requested_source,
-            "last_api_load_local": metadata.get("loaded_at_local", "-"),
-            "rows": metadata.get("rows", metadata.get("kept_rows", 0)),
-            "pages": metadata.get("pages", 0),
-            "downloaded_mb": metadata.get("downloaded_mb", "-"),
-            "fetch_seconds": metadata.get("fetch_seconds", "-"),
-            "snapshot_format": "parquet",
-            "force_refresh": force_refresh,
-        }
-    )
+            results[source_key] = {
+                "refresh_mode": metadata.get("refresh_mode", "snapshot_only"),
+                "snapshot_generation": manifest.get("generation"),
+                "last_api_load_local": metadata.get("loaded_at_local", "-"),
+                "rows": int(metadata.get("rows", 0) or 0),
+                "columns": int(metadata.get("columns", 0) or 0),
+                "api_pages_last_refresh": int(metadata.get("pages", 0) or 0),
+                "refresh_api_start_date": metadata.get("refresh_api_start_date", "-"),
+                "refresh_skipped_due_to_lock": bool(metadata.get("refresh_skipped_due_to_lock", False)),
+            }
+        except AtlasRefreshAlreadyRunning as exc:
+            failures[source_key] = f"already running: {exc}"
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            failures[source_key] = f"Marorka HTTP status {status}"
+        except (
+            MarorkaConfigError,
+            ValueError,
+            FileNotFoundError,
+            RuntimeError,
+            TimeoutError,
+            OSError,
+            requests.RequestException,
+        ) as exc:
+            failures[source_key] = str(exc)
+        finally:
+            gc.collect()
+
+    if results:
+        st.success("AtlasFlow prepared snapshot warmup completed.")
+        st.write(
+            {
+                "sources": results,
+                "force_refresh": force_refresh,
+                "full_refresh": full_refresh,
+                "warmup_seconds": round(time.perf_counter() - warmup_started_at, 2),
+            }
+        )
+    if failures:
+        st.error(
+            "Some AtlasFlow sources were not refreshed: "
+            + "; ".join(f"{source}: {error}" for source, error in failures.items())
+        )
+        for source_key in failures:
+            st.caption(source_refresh_status_summary(source_key))
     st.stop()
 
 # =============================================================================
@@ -3870,60 +5301,72 @@ def main() -> None:
         st.success("All AtlasFlow API snapshots refreshed successfully.")
         st.rerun()
 
-    raw_signature = request_signature(username, auth_method, api_start_date)
-    current_raw_signature = st.session_state.get("loaded_request_signature")
-    raw_df, long_df, metadata = get_loaded_state()
-
-    needs_raw_load = (
-        raw_df is None
-        or metadata is None
-        or not raw_data_covers_request(current_raw_signature, metadata, raw_signature, api_start_date)
+    reportdata_signature = atlas_source_signature(
+        "reportdata",
+        username,
+        auth_method,
+        api_start_date,
     )
-
-    if needs_raw_load:
-        snapshot = load_raw_snapshot(raw_signature, api_start_date)
-        if snapshot is not None:
-            raw_df, metadata, snapshot_signature = snapshot
-            set_loaded_raw_state(raw_df, metadata, snapshot_signature)
-            long_df = None
-            needs_raw_load = False
-
-    if needs_raw_load:
-        st.warning(
-            "No usable ReportData snapshot is available yet. "
-            "Run the ReportData warmup URL first so AtlasFlow can open from stored Parquet data instead of live-loading the large API in the UI."
-        )
-        st.code(
-            "https://atlas-flow.streamlit.app/?warmup=1&force=1&source=reportdata&token=warmup-atlas-flow",
-            language="text",
-        )
-        st.stop()
-
-    prepare_signature = {**raw_signature, "prepare_version": "atlasflow_dynamic_pivot_v3_oil_stats"}
-    current_prepare_signature = st.session_state.get("loaded_prepare_signature")
-    raw_df = st.session_state.get("loaded_raw_df")
+    reportdata_manifest = read_source_manifest("reportdata")
+    current_generation = (
+        reportdata_manifest.get("generation")
+        if isinstance(reportdata_manifest, dict)
+        else None
+    )
     long_df = st.session_state.get("loaded_long_df")
     metadata = st.session_state.get("loaded_metadata")
+    session_signature = st.session_state.get("loaded_request_signature")
+    session_generation = st.session_state.get("loaded_reportdata_generation")
+    session_ready = (
+        isinstance(long_df, pd.DataFrame)
+        and isinstance(metadata, dict)
+        and source_signature_covers_request(
+            session_signature,
+            reportdata_signature,
+            metadata,
+            api_start_date,
+        )
+        and session_generation == current_generation
+    )
 
-    if raw_df is None or metadata is None:
-        st.info("Loading Marorka data automatically. Use Refresh API data to force a new API pull.")
-        st.stop()
-
-    if long_df is None or current_prepare_signature != prepare_signature:
-        try:
-            transform_started_at = time.perf_counter()
-            long_df = cached_prepare_long_data(raw_df)
-            set_loaded_long_state(long_df, prepare_signature)
-            metadata = st.session_state.get("loaded_metadata")
-            if isinstance(metadata, dict):
-                metadata["prepare_seconds"] = round(time.perf_counter() - transform_started_at, 2)
-                metadata["long_rows"] = int(len(long_df))
-                metadata["available_variables"] = int(long_df["ValueDescription"].nunique()) if "ValueDescription" in long_df.columns else 0
-                st.session_state["loaded_metadata"] = metadata
-            gc.collect()
-        except (ValueError, TypeError) as exc:
-            st.error(str(exc))
+    if not session_ready:
+        snapshot = load_source_snapshot(
+            "reportdata",
+            reportdata_signature,
+            api_start_date,
+        )
+        if snapshot is None:
+            migrated = ensure_source_snapshot("reportdata", username, auth_method)
+            if migrated is not None:
+                snapshot = load_source_snapshot(
+                    "reportdata",
+                    reportdata_signature,
+                    api_start_date,
+                )
+        if snapshot is None:
+            st.warning(
+                "No prepared ReportData snapshot is available yet. Run the AtlasFlow warmup first; "
+                "normal users will not be forced to wait for the large API pull."
+            )
+            st.code(
+                "https://atlas-flow.streamlit.app/?warmup=1&force=1&source=all&token=warmup-atlas-flow",
+                language="text",
+            )
             st.stop()
+
+        long_df, metadata, snapshot_signature = snapshot
+        st.session_state.pop("loaded_raw_df", None)
+        st.session_state["loaded_long_df"] = long_df
+        st.session_state["loaded_metadata"] = metadata
+        st.session_state["loaded_request_signature"] = snapshot_signature
+        st.session_state["loaded_prepare_signature"] = source_data_signature("reportdata")
+        st.session_state["loaded_reportdata_generation"] = metadata.get("snapshot_generation")
+
+    long_df = st.session_state.get("loaded_long_df")
+    metadata = st.session_state.get("loaded_metadata")
+    if not isinstance(long_df, pd.DataFrame) or not isinstance(metadata, dict):
+        st.error("The prepared ReportData snapshot could not be loaded.")
+        st.stop()
 
     if long_df.empty:
         render_header(selected_group, selected_vessels, [])
