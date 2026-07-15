@@ -6735,11 +6735,21 @@ def render_monthly_comparison_workspace(
                 - numeric_block.min(axis=1)
             )
             displayed["Source Mean"] = numeric_block.mean(axis=1)
+            source_range = pd.to_numeric(
+                displayed["Source Range"],
+                errors="coerce",
+            )
+            source_mean = pd.to_numeric(
+                displayed["Source Mean"],
+                errors="coerce",
+            )
+            # Keep this calculation on a native floating dtype. Replacing zero
+            # with pd.NA can coerce the Series to object dtype, and object
+            # Series may raise TypeError when pandas applies round().
+            safe_source_mean = source_mean.where(source_mean.ne(0))
             displayed["Relative Range [%]"] = (
-                displayed["Source Range"]
-                / displayed["Source Mean"].replace(0, pd.NA)
-                * 100
-            ).round(2)
+                source_range.div(safe_source_mean).mul(100).round(2)
+            )
         displayed = displayed.sort_values(
             ["Month", "ShipName"],
             ascending=[False, True],
