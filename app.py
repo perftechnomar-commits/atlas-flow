@@ -16,6 +16,7 @@ from urllib.parse import urlencode, urljoin
 from zoneinfo import ZoneInfo
 import pandas as pd
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import requests
 import streamlit as st
@@ -89,7 +90,7 @@ DEFAULT_SOURCE_CHUNK_DAYS = {
 DEFAULT_SOURCE_OVERLAP_DAYS = {
     "reportdata": 14,
     "reportpivots": 14,
-    "shippivots": 3,
+    "shippivots": 10,
 }
 DEFAULT_SOURCE_FULL_REFRESH_MAX_MINUTES = {
     "reportdata": 240,
@@ -131,6 +132,18 @@ PERFORMANCE_KPI_VALUE_ALIASES = {
         "Power from Torque Meter [kW]",
         "Total Shaft Power [kW] (kW)",
         "Total Shaft Power [kW]",
+    ],
+    "GPS Speed [kn]": [
+        "GPS Speed [kn]",
+        "GPS Speed",
+        "Speed Over Ground [kn]",
+        "Speed Over Ground",
+    ],
+    "Log Speed [kn]": [
+        "Log Speed [kn]",
+        "Log Speed",
+        "Speed Through Water [kn]",
+        "Speed Through Water",
     ],
     "Main Engine - HSHFO": ["Main Engine - HSHFO"],
     "Main Engine - HSLFO": ["Main Engine - HSLFO"],
@@ -5125,6 +5138,1720 @@ def refresh_all_atlasflow_snapshots(
     return results
 
 
+
+# =============================================================================
+# Monthly partitioned storage and cross-source monthly comparison (v2)
+# =============================================================================
+
+# The original prepared-snapshot layer is retained for backwards compatibility,
+# but this version publishes immutable monthly partitions. Incremental warmups
+# rewrite only the months touched by the overlap window. Monthly summaries are
+# generated at publish time, so all vessels and full months can be compared
+# without opening millions of 15-minute rows in a browser session.
+ATLAS_SNAPSHOT_SCHEMA_VERSION = "2026-07-15-monthly-partitioned-comparison-v2"
+ATLAS_MONTHLY_COMPARISON_VERSION = "2026-07-15-cross-source-monthly-v1"
+ATLAS_RAW_INTERACTIVE_ROW_LIMIT = 50_000
+ATLAS_REPORTPIVOTS_INTERACTIVE_ROW_LIMIT = 250_000
+
+COMPARISON_SOURCE_LABELS = {
+    "reportdata": "ReportData",
+    "reportpivots": "ReportPivots",
+    "shippivots": "ShipPivots",
+}
+
+MONTHLY_COMPARISON_METRICS: dict[str, dict[str, Any]] = {
+    "Average Speed [kn]": {
+        "aggregation": "mean",
+        "candidates": [
+            "GPSSpeed", "GPS Speed [kn]", "GPS Speed", "Speed Over Ground [kn]", "Speed Over Ground", "SOG",
+            "LogSpeed", "Log Speed [kn]", "Log Speed", "Speed Through Water [kn]", "Speed Through Water", "STW",
+            "Average Speed", "Vessel Speed",
+        ],
+    },
+    "Average Shaft Power [kW]": {
+        "aggregation": "mean",
+        "candidates": [
+            "ShaftPower", "Shaft Power", "Power from Torque Meter [kW]",
+            "Total Shaft Power [kW]", "Total Shaft Power [kW] (kW)",
+            "ME Power", "Main Engine Power",
+        ],
+    },
+    "Average ME Load [%]": {
+        "aggregation": "mean",
+        "percentage": True,
+        "candidates": [
+            "ME Load [%MCR]", "ME Load [% MCR]", "MELoad",
+            "ME Load", "Main Engine Load", "MainEngineLoad",
+        ],
+    },
+    "Total ME Fuel [MT]": {
+        "aggregation": "sum",
+        "candidates": [
+            "Main Engine Total Consumed", "ME Total Consumed",
+            "MEConsumed", "Main Engine Consumption", "ME Consumption",
+        ],
+        "component_candidates": ME_FUEL_COLUMNS,
+    },
+    "Total DG Fuel [MT]": {
+        "aggregation": "sum",
+        "candidates": [
+            "Diesel Generator Total Consumed", "DG Total Consumed",
+            "DG Totals Consumed", "DGTotalsConsumed", "DGTotalConsumed",
+            "DGConsumed", "Generator Total Consumed",
+        ],
+        "component_candidates": DG_FUEL_COLUMNS,
+    },
+    "Total Auxiliary Fuel [MT]": {
+        "aggregation": "sum",
+        "candidates": [
+            "Auxiliary Engine Total Consumed", "Aux Engine Total Consumed",
+            "Aux Total Consumed", "AuxConsumed",
+        ],
+        "component_candidates": AUXILIARY_FUEL_COLUMNS,
+    },
+    "Total Boiler Fuel [MT]": {
+        "aggregation": "sum",
+        "candidates": [
+            "Boiler Total Consumed", "BoilerConsumed", "Boiler Consumption",
+        ],
+        "component_candidates": BOILER_FUEL_COLUMNS,
+    },
+    "Total Fuel [MT]": {
+        "aggregation": "sum",
+        "candidates": [
+            "Total Fuel Consumed", "Total Consumed", "Total Consumption",
+            "Bunker Consumption", "Fuel Consumption", "FuelConsumed",
+        ],
+    },
+    "Total Distance [nm]": {
+        "aggregation": "sum",
+        "candidates": [
+            "Distance Over Ground [nm]", "DistanceOverGround", "Distance Over Ground",
+            "Engine Distance [nm]", "EngineDistance", "Sailed Distance", "Distance",
+        ],
+    },
+    "Total Running Hours [h]": {
+        "aggregation": "sum",
+        "candidates": [
+            "Steaming Time Since Last Report [hh:mm]",
+            "Steaming Time Since Last Report", "RunningHours", "Running Hours",
+            "LapTime", "Operating Hours",
+        ],
+    },
+    "Average SFOC [g/kWh]": {
+        "aggregation": "mean",
+        "candidates": ["SFOC [g/kWh]", "SFOC [gr/Kwh]", "SFOC"],
+    },
+}
+
+
+def source_partition_root(source_key: str) -> Path:
+    return SNAPSHOT_DIR / "monthly" / source_key
+
+
+def source_partition_file(source_key: str, month_key: str, generation: str) -> Path:
+    return source_partition_root(source_key) / f"data_{month_key.replace('-', '')}_{generation}.parquet"
+
+
+def source_summary_file(source_key: str, month_key: str, generation: str) -> Path:
+    return source_partition_root(source_key) / f"summary_{month_key.replace('-', '')}_{generation}.parquet"
+
+
+def month_start_from_key(month_key: str) -> date:
+    year_text, month_text = month_key.split("-", 1)
+    return date(int(year_text), int(month_text), 1)
+
+
+def next_month_start(value: date) -> date:
+    return date(value.year + 1, 1, 1) if value.month == 12 else date(value.year, value.month + 1, 1)
+
+
+def month_keys_for_range(start_value: date, end_exclusive: date) -> list[str]:
+    if start_value >= end_exclusive:
+        return []
+    cursor = date(start_value.year, start_value.month, 1)
+    keys: list[str] = []
+    while cursor < end_exclusive:
+        keys.append(f"{cursor.year:04d}-{cursor.month:02d}")
+        cursor = next_month_start(cursor)
+    return keys
+
+
+def manifest_partitions(manifest: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("partitions"), dict):
+        return {}
+    return {
+        str(month_key): dict(entry)
+        for month_key, entry in manifest["partitions"].items()
+        if isinstance(entry, dict)
+    }
+
+
+def partition_entry_path(entry: dict[str, Any], field: str = "file") -> Path:
+    return SNAPSHOT_DIR / str(entry.get(field, ""))
+
+
+def source_manifest_is_valid(
+    source_key: str,
+    manifest: dict[str, Any] | None,
+    requested_signature: dict[str, Any],
+    requested_start_date: date,
+) -> bool:
+    if not manifest:
+        return False
+    if manifest.get("snapshot_schema_version") != ATLAS_SNAPSHOT_SCHEMA_VERSION:
+        return False
+    if manifest.get("source") != source_key:
+        return False
+    metadata = manifest.get("metadata") or {}
+    stored_signature = manifest.get("signature") or {}
+    if not source_signature_covers_request(
+        stored_signature,
+        requested_signature,
+        metadata,
+        requested_start_date,
+    ):
+        return False
+    partitions = manifest_partitions(manifest)
+    if not partitions:
+        return False
+    for entry in partitions.values():
+        if not partition_entry_path(entry, "file").is_file():
+            return False
+        if entry.get("summary_file") and not partition_entry_path(entry, "summary_file").is_file():
+            return False
+    return True
+
+
+@st.cache_data(show_spinner=False)
+def cached_read_partitioned_source_snapshot(
+    source_key: str,
+    generation: str,
+    partition_files: tuple[str, ...],
+) -> pd.DataFrame:
+    del source_key, generation
+    frames = [pd.read_parquet(file_name) for file_name in partition_files]
+    frames = [frame for frame in frames if isinstance(frame, pd.DataFrame) and not frame.empty]
+    return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def cached_read_monthly_summary_files(
+    generation_signature: str,
+    summary_files: tuple[str, ...],
+) -> pd.DataFrame:
+    del generation_signature
+    frames = [pd.read_parquet(file_name) for file_name in summary_files]
+    frames = [frame for frame in frames if isinstance(frame, pd.DataFrame) and not frame.empty]
+    return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+
+
+def load_source_snapshot(
+    source_key: str,
+    requested_signature: dict[str, Any],
+    requested_start_date: date,
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]] | None:
+    requested_signature = dict(requested_signature or {})
+    requested_signature.setdefault("source", source_key)
+    requested_signature.setdefault("data_signature", source_data_signature(source_key))
+    manifest = read_source_manifest(source_key)
+    if not source_manifest_is_valid(source_key, manifest, requested_signature, requested_start_date):
+        return None
+    assert manifest is not None
+    partitions = manifest_partitions(manifest)
+    total_rows = int((manifest.get("metadata") or {}).get("rows", 0) or 0)
+    # Wide sources are intentionally read through load_wide_source_for_view(),
+    # which applies predicate pushdown. Refuse a full wide-source materialization.
+    if source_key != "reportdata" and total_rows > ATLAS_REPORTPIVOTS_INTERACTIVE_ROW_LIMIT:
+        return None
+    files = tuple(
+        str(partition_entry_path(partitions[month_key], "file"))
+        for month_key in sorted(partitions)
+    )
+    try:
+        frame = cached_read_partitioned_source_snapshot(
+            source_key,
+            str(manifest.get("generation", "")),
+            files,
+        )
+    except Exception:
+        return None
+    metadata = dict(manifest.get("metadata") or {})
+    metadata["loaded_from_snapshot"] = True
+    metadata["snapshot_generation"] = manifest.get("generation")
+    metadata.setdefault("snapshot_saved_at_utc", manifest.get("saved_at_utc", "-"))
+    metadata["partition_count"] = len(partitions)
+    return frame, metadata, dict(manifest.get("signature") or {})
+
+
+def source_snapshot_info(
+    source_key: str,
+    username: str,
+    auth_method: str,
+    start_date: date,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    signature = atlas_source_signature(source_key, username, auth_method, start_date)
+    manifest = read_source_manifest(source_key)
+    if not source_manifest_is_valid(source_key, manifest, signature, start_date):
+        return None
+    assert manifest is not None
+    return dict(manifest.get("metadata") or {}), manifest
+
+
+def _candidate_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    normalized_columns = {normalize_text(column): str(column) for column in df.columns}
+    for candidate in candidates:
+        match = normalized_columns.get(normalize_text(candidate))
+        if match is not None:
+            return match
+    for candidate in candidates:
+        candidate_key = normalize_text(candidate)
+        if len(candidate_key) < 6:
+            continue
+        for normalized_column, original_column in normalized_columns.items():
+            if candidate_key in normalized_column or normalized_column in candidate_key:
+                return original_column
+    return None
+
+
+def _reportdata_metric_rows(
+    frame: pd.DataFrame,
+    spec: dict[str, Any],
+) -> tuple[pd.DataFrame, str | None]:
+    if frame.empty or "ValueDescription" not in frame.columns:
+        return pd.DataFrame(), None
+    description_keys = frame["ValueDescription"].map(normalize_text)
+    for candidate in list(spec.get("candidates") or []):
+        mask = description_keys.eq(normalize_text(candidate))
+        if mask.any():
+            selected = frame.loc[mask, ["ShipName", "ReportId", "ParsedValue"]].copy()
+            selected["MetricValue"] = pd.to_numeric(selected["ParsedValue"], errors="coerce")
+            return selected, candidate
+    components = list(spec.get("component_candidates") or [])
+    component_keys = {normalize_text(value) for value in components}
+    if component_keys:
+        mask = description_keys.isin(component_keys)
+        if mask.any():
+            selected = frame.loc[mask, ["ShipName", "ReportId", "ParsedValue"]].copy()
+            selected["MetricValue"] = pd.to_numeric(selected["ParsedValue"], errors="coerce")
+            selected = (
+                selected.groupby(["ShipName", "ReportId"], dropna=False, as_index=False)["MetricValue"]
+                .sum(min_count=1)
+            )
+            return selected, " + ".join(components)
+    return pd.DataFrame(), None
+
+
+def _period_day_count(month_key: str) -> int:
+    month_start = month_start_from_key(month_key)
+    end_exclusive = min(next_month_start(month_start), date.today() + timedelta(days=1))
+    return max((end_exclusive - month_start).days, 1)
+
+
+def build_monthly_source_summary(
+    source_key: str,
+    partition_df: pd.DataFrame,
+    month_key: str,
+) -> pd.DataFrame:
+    if partition_df.empty:
+        return pd.DataFrame()
+    datetime_column = source_primary_datetime_column(source_key)
+    if datetime_column not in partition_df.columns or "ShipName" not in partition_df.columns:
+        return pd.DataFrame()
+    frame = partition_df.copy()
+    frame[datetime_column] = pd.to_datetime(frame[datetime_column], errors="coerce", utc=True)
+    frame = frame[frame[datetime_column].notna() & frame["ShipName"].notna()].copy()
+    if frame.empty:
+        return pd.DataFrame()
+    frame["ShipName"] = frame["ShipName"].astype("string")
+    frame["_ObservedDate"] = frame[datetime_column].dt.date
+    grouped = frame.groupby("ShipName", dropna=False)
+    records = grouped["ReportId"].nunique(dropna=True) if source_key == "reportdata" and "ReportId" in frame.columns else grouped.size()
+    first_timestamp = grouped[datetime_column].min().reindex(records.index)
+    last_timestamp = grouped[datetime_column].max().reindex(records.index)
+    observed_days = grouped["_ObservedDate"].nunique(dropna=True).reindex(records.index)
+    summary = pd.DataFrame(
+        {
+            "ShipName": records.index.astype(str),
+            "Records": records.to_numpy(),
+            "First Timestamp": first_timestamp.to_numpy(),
+            "Last Timestamp": last_timestamp.to_numpy(),
+            "Observed Days": observed_days.to_numpy(),
+        }
+    )
+    summary.insert(0, "Source", COMPARISON_SOURCE_LABELS[source_key])
+    summary.insert(0, "Month", month_key)
+    period_days = _period_day_count(month_key)
+    summary["Period Days"] = period_days
+    summary["Month Complete"] = next_month_start(month_start_from_key(month_key)) <= date.today()
+    summary["Day Coverage [%]"] = (
+        pd.to_numeric(summary["Observed Days"], errors="coerce") / period_days * 100
+    ).clip(upper=100).round(2)
+    if source_key == "shippivots":
+        unique_timestamps = grouped[datetime_column].nunique(dropna=True).reindex(records.index)
+        observation_coverage = pd.Series(
+            unique_timestamps.to_numpy() / max(period_days * 24 * 4, 1) * 100,
+            index=summary.index,
+            dtype="float64",
+        )
+        summary["Observation Coverage [%]"] = observation_coverage.clip(upper=100).round(2)
+    else:
+        summary["Observation Coverage [%]"] = pd.NA
+
+    for metric_name, spec in MONTHLY_COMPARISON_METRICS.items():
+        mapping_column = f"Mapping: {metric_name}"
+        aggregation = str(spec.get("aggregation", "mean"))
+        if source_key == "reportdata":
+            metric_rows, mapping = _reportdata_metric_rows(frame, spec)
+            if metric_rows.empty:
+                summary[metric_name] = pd.NA
+                summary[mapping_column] = pd.NA
+                continue
+            metric_group = metric_rows.groupby("ShipName", dropna=False)["MetricValue"]
+        else:
+            source_column = _candidate_column(frame, list(spec.get("candidates") or []))
+            if source_column is None:
+                summary[metric_name] = pd.NA
+                summary[mapping_column] = pd.NA
+                continue
+            metric_rows = pd.DataFrame(
+                {
+                    "ShipName": frame["ShipName"],
+                    "MetricValue": pd.to_numeric(frame[source_column], errors="coerce"),
+                }
+            )
+            metric_group = metric_rows.groupby("ShipName", dropna=False)["MetricValue"]
+            mapping = source_column
+        aggregated = metric_group.sum(min_count=1) if aggregation == "sum" else metric_group.mean()
+        values = summary["ShipName"].map(aggregated)
+        if spec.get("percentage"):
+            numeric = pd.to_numeric(values, errors="coerce")
+            non_null = numeric.dropna()
+            if not non_null.empty and non_null.abs().median() <= 1.5:
+                numeric = numeric * 100
+            values = numeric
+        summary[metric_name] = pd.to_numeric(values, errors="coerce").round(3)
+        summary[mapping_column] = mapping
+
+    component_total = pd.concat(
+        [
+            pd.to_numeric(summary.get("Total ME Fuel [MT]"), errors="coerce"),
+            pd.to_numeric(summary.get("Total DG Fuel [MT]"), errors="coerce"),
+            pd.to_numeric(summary.get("Total Auxiliary Fuel [MT]"), errors="coerce"),
+            pd.to_numeric(summary.get("Total Boiler Fuel [MT]"), errors="coerce"),
+        ],
+        axis=1,
+    ).sum(axis=1, min_count=1)
+    direct_total = pd.to_numeric(summary.get("Total Fuel [MT]"), errors="coerce")
+    summary["Total Fuel [MT]"] = direct_total.fillna(component_total).round(3)
+    return summary.sort_values("ShipName").reset_index(drop=True)
+
+
+def _source_partition_columns(
+    source_key: str,
+    existing_manifest: dict[str, Any] | None,
+    fresh_columns: list[str],
+) -> list[str]:
+    columns: list[str] = []
+    for entry in manifest_partitions(existing_manifest).values():
+        path = partition_entry_path(entry, "file")
+        if not path.is_file():
+            continue
+        try:
+            for column in pq.ParquetFile(path).schema.names:
+                if column not in columns:
+                    columns.append(column)
+        except Exception:
+            continue
+    for column in fresh_columns:
+        if column not in columns:
+            columns.append(column)
+    if source_key == "reportdata":
+        ordered = [*SOURCE_COLUMNS, "ParsedValue"]
+        return ordered
+    datetime_column = source_primary_datetime_column(source_key)
+    if datetime_column not in columns:
+        columns.insert(0, datetime_column)
+    return columns or [datetime_column]
+
+
+def _split_fresh_chunks_to_month_files(
+    source_key: str,
+    chunk_files: list[Path],
+    work_dir: Path,
+    columns: list[str],
+) -> dict[str, Path]:
+    schema = source_arrow_schema(source_key, columns)
+    datetime_column = source_primary_datetime_column(source_key)
+    writers: dict[str, pq.ParquetWriter] = {}
+    month_paths: dict[str, Path] = {}
+    try:
+        for chunk_path in chunk_files:
+            parquet_file = pq.ParquetFile(chunk_path)
+            for batch in parquet_file.iter_batches(batch_size=25_000):
+                frame = batch.to_pandas()
+                if datetime_column not in frame.columns:
+                    continue
+                dates = pd.to_datetime(frame[datetime_column], errors="coerce", utc=True)
+                valid = dates.notna()
+                if not valid.any():
+                    continue
+                frame = frame.loc[valid].copy()
+                month_values = dates.loc[valid].dt.strftime("%Y-%m")
+                for month_key in month_values.dropna().unique().tolist():
+                    subset = frame.loc[month_values.eq(month_key)].copy()
+                    if subset.empty:
+                        continue
+                    aligned = align_source_frame(source_key, subset, columns)
+                    table = pa.Table.from_pandas(aligned, schema=schema, preserve_index=False)
+                    if month_key not in writers:
+                        path = work_dir / f"fresh_{month_key.replace('-', '')}.parquet"
+                        month_paths[month_key] = path
+                        writers[month_key] = pq.ParquetWriter(path, schema, compression="zstd")
+                    writers[month_key].write_table(table)
+                    del subset, aligned, table
+                del frame, dates, month_values
+                gc.collect()
+    finally:
+        for writer in writers.values():
+            writer.close()
+    return month_paths
+
+
+def _read_month_frame(
+    source_key: str,
+    path: Path | None,
+    *,
+    before_date: date | None = None,
+) -> pd.DataFrame:
+    if path is None or not path.is_file():
+        return pd.DataFrame()
+    frame = pd.read_parquet(path)
+    if before_date is not None and not frame.empty:
+        datetime_column = source_primary_datetime_column(source_key)
+        if datetime_column in frame.columns:
+            values = pd.to_datetime(frame[datetime_column], errors="coerce", utc=True)
+            frame = frame.loc[
+                values.isna() | values.lt(pd.Timestamp(before_date, tz="UTC"))
+            ].copy()
+    return frame
+
+
+def _partition_file_metadata(
+    source_key: str,
+    month_key: str,
+    data_path: Path,
+    summary_path: Path,
+    frame: pd.DataFrame,
+    summary: pd.DataFrame,
+) -> dict[str, Any]:
+    datetime_column = source_primary_datetime_column(source_key)
+    values = (
+        pd.to_datetime(frame[datetime_column], errors="coerce", utc=True)
+        if datetime_column in frame.columns
+        else pd.Series(dtype="datetime64[ns, UTC]")
+    )
+    return {
+        "month": month_key,
+        "file": str(data_path.relative_to(SNAPSHOT_DIR)),
+        "summary_file": str(summary_path.relative_to(SNAPSHOT_DIR)),
+        "rows": int(len(frame)),
+        "summary_rows": int(len(summary)),
+        "columns": int(len(frame.columns)),
+        "min_datetime": (
+            values.min().isoformat()
+            if not values.empty and values.notna().any()
+            else None
+        ),
+        "max_datetime": (
+            values.max().isoformat()
+            if not values.empty and values.notna().any()
+            else None
+        ),
+    }
+
+
+def _cleanup_partition_files(source_key: str, current_manifest: dict[str, Any]) -> None:
+    root = source_partition_root(source_key)
+    if not root.is_dir():
+        return
+    referenced = {
+        str(partition_entry_path(entry, field).resolve())
+        for entry in manifest_partitions(current_manifest).values()
+        for field in ["file", "summary_file"]
+        if entry.get(field)
+    }
+    grouped: dict[str, list[Path]] = {}
+    for path in root.glob("*.parquet"):
+        parts = path.stem.split("_")
+        group_key = "_".join(parts[:2]) if len(parts) >= 2 else path.stem
+        grouped.setdefault(group_key, []).append(path)
+    for paths in grouped.values():
+        paths.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+        protected = {str(path.resolve()) for path in paths[:2]} | referenced
+        for path in paths:
+            if str(path.resolve()) not in protected:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+
+
+def publish_source_snapshot(
+    source_key: str,
+    existing_manifest: dict[str, Any] | None,
+    refresh_start_date: date,
+    work_dir: Path,
+    chunk_files: list[Path],
+    fresh_columns: list[str],
+    refresh_metadata: dict[str, Any],
+    signature: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Publish immutable monthly source partitions and monthly summaries."""
+    existing_partitions = manifest_partitions(existing_manifest)
+    columns = _source_partition_columns(source_key, existing_manifest, fresh_columns)
+    generation = snapshot_generation()
+    source_partition_root(source_key).mkdir(parents=True, exist_ok=True)
+    fresh_month_files = _split_fresh_chunks_to_month_files(
+        source_key,
+        chunk_files,
+        work_dir,
+        columns,
+    )
+    try:
+        end_exclusive = date.fromisoformat(
+            str(refresh_metadata.get("refresh_end_date_exclusive"))
+        )
+    except ValueError:
+        end_exclusive = date.today() + timedelta(days=1)
+    affected_months = month_keys_for_range(refresh_start_date, end_exclusive)
+    new_partitions = dict(existing_partitions)
+
+    for month_key in affected_months:
+        old_entry = existing_partitions.get(month_key)
+        old_path = partition_entry_path(old_entry, "file") if old_entry else None
+        month_start = month_start_from_key(month_key)
+        before_date = (
+            refresh_start_date
+            if month_start <= refresh_start_date < next_month_start(month_start)
+            else None
+        )
+        old_frame = _read_month_frame(source_key, old_path, before_date=before_date)
+        fresh_frame = _read_month_frame(source_key, fresh_month_files.get(month_key))
+        combined = pd.concat([old_frame, fresh_frame], ignore_index=True, sort=False)
+        if combined.empty:
+            new_partitions.pop(month_key, None)
+            continue
+        combined = normalize_source_snapshot_frame(source_key, combined)
+        combined = deduplicate_source_window(source_key, combined)
+        datetime_column = source_primary_datetime_column(source_key)
+        sort_columns = [
+            column for column in [datetime_column, "ShipName"]
+            if column in combined.columns
+        ]
+        if sort_columns:
+            combined = combined.sort_values(sort_columns)
+        data_path = source_partition_file(source_key, month_key, generation)
+        summary_path = source_summary_file(source_key, month_key, generation)
+        combined.to_parquet(data_path, index=False, compression="zstd")
+        summary = build_monthly_source_summary(source_key, combined, month_key)
+        if summary.empty:
+            summary = pd.DataFrame(
+                columns=[
+                    "Month", "Source", "ShipName", "Records",
+                    "First Timestamp", "Last Timestamp", "Observed Days",
+                    "Period Days", "Day Coverage [%]", "Observation Coverage [%]",
+                ]
+            )
+        summary.to_parquet(summary_path, index=False, compression="zstd")
+        new_partitions[month_key] = _partition_file_metadata(
+            source_key,
+            month_key,
+            data_path,
+            summary_path,
+            combined,
+            summary,
+        )
+        del old_frame, fresh_frame, combined, summary
+        gc.collect()
+
+    if not new_partitions:
+        raise RuntimeError(
+            f"{SOURCE_CONFIGS[source_key]['label']} produced no monthly partitions."
+        )
+
+    total_rows = sum(
+        int(entry.get("rows", 0) or 0)
+        for entry in new_partitions.values()
+    )
+    latest_values = [
+        entry.get("max_datetime")
+        for entry in new_partitions.values()
+        if entry.get("max_datetime")
+    ]
+    latest_source_date = (
+        max(pd.Timestamp(value) for value in latest_values).date().isoformat()
+        if latest_values
+        else None
+    )
+    loaded_at_utc = datetime.now(timezone.utc)
+    metadata = dict(refresh_metadata)
+    metadata.update(
+        {
+            "source": SOURCE_CONFIGS[source_key]["label"],
+            "endpoint": str(SOURCE_CONFIGS[source_key]["endpoint"]),
+            "loaded_at_utc": loaded_at_utc.strftime("%d-%m-%Y %H:%M:%S UTC"),
+            "loaded_at_local": local_time_label(loaded_at_utc),
+            "loaded_start_date": API_FULL_START_DATE.isoformat(),
+            "rows": int(total_rows),
+            "kept_rows": int(total_rows),
+            "columns": int(len(columns)),
+            "partition_count": int(len(new_partitions)),
+            "snapshot_generation": generation,
+            "snapshot_format": "monthly_partitioned_parquet",
+            "snapshot_schema_version": ATLAS_SNAPSHOT_SCHEMA_VERSION,
+            "comparison_schema_version": ATLAS_MONTHLY_COMPARISON_VERSION,
+            "latest_source_date": latest_source_date,
+        }
+    )
+    saved_at_utc = loaded_at_utc.strftime("%d-%m-%Y %H:%M:%S UTC")
+    manifest = {
+        "snapshot_schema_version": ATLAS_SNAPSHOT_SCHEMA_VERSION,
+        "comparison_schema_version": ATLAS_MONTHLY_COMPARISON_VERSION,
+        "source": source_key,
+        "generation": generation,
+        "signature": signature,
+        "partitions": {
+            key: new_partitions[key]
+            for key in sorted(new_partitions)
+        },
+        "metadata": metadata,
+        "saved_at_utc": saved_at_utc,
+    }
+    _atomic_write_text(
+        source_manifest_path(source_key),
+        json.dumps(manifest, indent=2, default=str),
+    )
+
+    cached_read_prepared_source_snapshot.clear()
+    cached_read_partitioned_source_snapshot.clear()
+    cached_read_monthly_summary_files.clear()
+    if source_key == "reportdata":
+        cached_prepare_long_data.clear()
+        build_pivot_table.clear()
+    clear_wide_source_state(source_key)
+    _cleanup_partition_files(source_key, manifest)
+    cleanup_legacy_source_files(source_key)
+    update_source_refresh_status(
+        source_key,
+        state="complete",
+        stage="published",
+        refresh_mode=metadata.get("refresh_mode"),
+        rows_kept=total_rows,
+        partition_count=len(new_partitions),
+        snapshot_generation=generation,
+    )
+    return metadata, manifest
+
+
+def _legacy_source_file(source_key: str) -> Path | None:
+    manifest = read_source_manifest(source_key)
+    if isinstance(manifest, dict) and manifest.get("prepared_file"):
+        candidate = SNAPSHOT_DIR / str(manifest["prepared_file"])
+        if candidate.is_file():
+            return candidate
+    candidate = Path(SOURCE_CONFIGS[source_key]["snapshot_file"])
+    return candidate if candidate.is_file() else None
+
+
+def migrate_legacy_source_snapshot(
+    source_key: str,
+    username: str,
+    auth_method: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    # ReportData is compacted through a ValueDescription whitelist. This release
+    # adds comparison fields (including speed), so an old compact snapshot cannot
+    # be considered historically complete. Force one full ReportData bootstrap;
+    # wide ReportPivots/ShipPivots snapshots can be partition-migrated safely.
+    if source_key == "reportdata":
+        return None
+    legacy_file = _legacy_source_file(source_key)
+    if legacy_file is None:
+        return None
+    try:
+        parquet_file = pq.ParquetFile(legacy_file)
+        fresh_columns = list(parquet_file.schema.names)
+        if not fresh_columns:
+            return None
+        work_dir = SNAPSHOT_DIR / (
+            f".refresh_{source_key}_migration_{os.getpid()}_"
+            f"{int(time.time() * 1000)}"
+        )
+        work_dir.mkdir(parents=True, exist_ok=False)
+        signature = atlas_source_signature(
+            source_key,
+            username,
+            auth_method,
+            API_FULL_START_DATE,
+        )
+        metadata = {
+            "refresh_mode": "legacy_partition_migration",
+            "refresh_api_start_date": API_FULL_START_DATE.isoformat(),
+            "refresh_end_date_exclusive": (
+                date.today() + timedelta(days=1)
+            ).isoformat(),
+            "chunk_days": 0,
+            "chunks_total": 1,
+            "chunks_completed": 1,
+            "refresh_rows": int(parquet_file.metadata.num_rows),
+            "scanned_rows": int(parquet_file.metadata.num_rows),
+            "pages": 0,
+            "downloaded_mb": 0,
+            "fetch_seconds": 0,
+            "first_url": "legacy_snapshot",
+            "paging_stop_reason": "legacy_partition_migration",
+            "hit_page_limit": False,
+            "latest_source_date": None,
+        }
+        published = publish_source_snapshot(
+            source_key,
+            None,
+            API_FULL_START_DATE,
+            work_dir,
+            [legacy_file],
+            fresh_columns,
+            metadata,
+            signature,
+        )
+        remove_refresh_work_dir(work_dir)
+        return published
+    except Exception:
+        return None
+
+
+def ensure_source_snapshot(
+    source_key: str,
+    username: str,
+    auth_method: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    existing = source_snapshot_info(
+        source_key,
+        username,
+        auth_method,
+        API_FULL_START_DATE,
+    )
+    if existing is not None:
+        return existing
+    with source_refresh_lock(source_key) as lock_acquired:
+        if not lock_acquired:
+            return source_snapshot_info(
+                source_key,
+                username,
+                auth_method,
+                API_FULL_START_DATE,
+            )
+        existing = source_snapshot_info(
+            source_key,
+            username,
+            auth_method,
+            API_FULL_START_DATE,
+        )
+        if existing is not None:
+            return existing
+        return migrate_legacy_source_snapshot(
+            source_key,
+            username,
+            auth_method,
+        )
+
+
+def refresh_source_snapshot(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    *,
+    full_refresh: bool,
+    acquire_lock: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if source_key not in SOURCE_CONFIGS:
+        raise ValueError(f"Unsupported AtlasFlow source: {source_key}")
+    requested_signature = atlas_source_signature(
+        source_key,
+        username,
+        auth_method,
+        API_FULL_START_DATE,
+    )
+
+    def execute_refresh() -> tuple[dict[str, Any], dict[str, Any]]:
+        existing_manifest = read_source_manifest(source_key)
+        if not source_manifest_is_valid(
+            source_key,
+            existing_manifest,
+            requested_signature,
+            API_FULL_START_DATE,
+        ):
+            migrated = migrate_legacy_source_snapshot(
+                source_key,
+                username,
+                auth_method,
+            )
+            existing_manifest = (
+                read_source_manifest(source_key)
+                if migrated is not None
+                else None
+            )
+        if not source_manifest_is_valid(
+            source_key,
+            existing_manifest,
+            requested_signature,
+            API_FULL_START_DATE,
+        ):
+            existing_manifest = None
+
+        refresh_mode = "full"
+        refresh_start_date = API_FULL_START_DATE
+        if not full_refresh and existing_manifest is not None:
+            latest_text = (existing_manifest.get("metadata") or {}).get(
+                "latest_source_date"
+            )
+            try:
+                latest_date = (
+                    date.fromisoformat(str(latest_text))
+                    if latest_text
+                    else None
+                )
+            except ValueError:
+                latest_date = None
+            if latest_date is not None:
+                overlap_days = read_int_secret(
+                    source_secret_name(
+                        source_key,
+                        "INCREMENTAL_OVERLAP_DAYS",
+                    ),
+                    DEFAULT_SOURCE_OVERLAP_DAYS[source_key],
+                    minimum=1,
+                    maximum=90,
+                )
+                refresh_start_date = max(
+                    API_FULL_START_DATE,
+                    latest_date - timedelta(days=overlap_days),
+                )
+                refresh_mode = "incremental"
+
+        chunk_days = read_int_secret(
+            source_secret_name(source_key, "REFRESH_CHUNK_DAYS"),
+            DEFAULT_SOURCE_CHUNK_DAYS[source_key],
+            minimum=1,
+            maximum=62,
+        )
+        default_minutes = (
+            DEFAULT_SOURCE_FULL_REFRESH_MAX_MINUTES[source_key]
+            if refresh_mode == "full"
+            else DEFAULT_SOURCE_INCREMENTAL_REFRESH_MAX_MINUTES[source_key]
+        )
+        max_minutes = read_int_secret(
+            source_secret_name(
+                source_key,
+                (
+                    "FULL_REFRESH_MAX_MINUTES"
+                    if refresh_mode == "full"
+                    else "INCREMENTAL_REFRESH_MAX_MINUTES"
+                ),
+            ),
+            default_minutes,
+            minimum=5,
+            maximum=720,
+        )
+        end_exclusive = date.today() + timedelta(days=1)
+        work_dir: Path | None = None
+        try:
+            update_source_refresh_status(
+                source_key,
+                state="running",
+                stage="starting",
+                refresh_mode=refresh_mode,
+                refresh_start_date=refresh_start_date.isoformat(),
+                end_date_exclusive=end_exclusive.isoformat(),
+                chunk_days=chunk_days,
+                max_minutes=max_minutes,
+            )
+            (
+                work_dir,
+                chunk_files,
+                fresh_columns,
+                refresh_metadata,
+            ) = collect_source_chunks(
+                source_key,
+                username,
+                password,
+                token,
+                auth_method,
+                refresh_start_date,
+                end_exclusive,
+                chunk_days,
+                max_minutes * 60,
+                refresh_mode,
+            )
+            if int(refresh_metadata.get("scanned_rows", 0) or 0) == 0:
+                if existing_manifest is not None:
+                    metadata = dict(existing_manifest.get("metadata") or {})
+                    metadata.update(
+                        {
+                            "refresh_mode": "no_changes",
+                            "refresh_api_start_date": refresh_start_date.isoformat(),
+                            "refresh_checked_at_local": local_time_label(),
+                        }
+                    )
+                    update_source_refresh_status(
+                        source_key,
+                        state="complete",
+                        stage="no_changes",
+                        refresh_mode="no_changes",
+                    )
+                    return metadata, existing_manifest
+                raise RuntimeError(
+                    f"{SOURCE_CONFIGS[source_key]['label']} returned zero rows "
+                    "during initial bootstrap."
+                )
+            update_source_refresh_status(
+                source_key,
+                state="running",
+                stage="partitioning",
+                refresh_mode=refresh_mode,
+                pages_completed=int(
+                    refresh_metadata.get("pages", 0) or 0
+                ),
+                rows_kept=int(
+                    refresh_metadata.get("refresh_rows", 0) or 0
+                ),
+            )
+            return publish_source_snapshot(
+                source_key,
+                (
+                    existing_manifest
+                    if refresh_mode == "incremental"
+                    else None
+                ),
+                refresh_start_date,
+                work_dir,
+                chunk_files,
+                fresh_columns,
+                refresh_metadata,
+                requested_signature,
+            )
+        except Exception as exc:
+            update_source_refresh_status(
+                source_key,
+                state="failed",
+                stage="failed",
+                refresh_mode=refresh_mode,
+                error=str(exc),
+            )
+            raise
+        finally:
+            remove_refresh_work_dir(work_dir)
+
+    if not acquire_lock:
+        return execute_refresh()
+    with source_refresh_lock(source_key) as lock_acquired:
+        if not lock_acquired:
+            existing = source_snapshot_info(
+                source_key,
+                username,
+                auth_method,
+                API_FULL_START_DATE,
+            )
+            if existing is not None:
+                metadata, manifest = existing
+                metadata = dict(metadata)
+                metadata["refresh_skipped_due_to_lock"] = True
+                metadata["refresh_status"] = source_refresh_status_summary(
+                    source_key
+                )
+                return metadata, manifest
+            raise AtlasRefreshAlreadyRunning(
+                source_refresh_status_summary(source_key)
+            )
+        return execute_refresh()
+
+
+def _partition_entries_for_period(
+    manifest: dict[str, Any],
+    selected_start: date,
+    selected_end: date,
+) -> list[dict[str, Any]]:
+    wanted_months = set(
+        month_keys_for_range(
+            selected_start,
+            selected_end + timedelta(days=1),
+        )
+    )
+    partitions = manifest_partitions(manifest)
+    return [
+        partitions[month_key]
+        for month_key in sorted(partitions)
+        if month_key in wanted_months
+    ]
+
+
+def _dataset_filter_expression(
+    source_key: str,
+    schema_names: list[str],
+    selected_vessels: list[str] | None,
+    selected_start: date | None,
+    selected_end: date | None,
+) -> Any:
+    expression = None
+    if selected_vessels and "ShipName" in schema_names:
+        expression = ds.field("ShipName").isin(list(selected_vessels))
+    datetime_column = source_primary_datetime_column(source_key)
+    if datetime_column in schema_names:
+        if selected_start is not None:
+            start_value = datetime.combine(
+                selected_start,
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            )
+            start_expression = ds.field(datetime_column) >= pa.scalar(
+                start_value,
+                type=pa.timestamp("ns", tz="UTC"),
+            )
+            expression = (
+                start_expression
+                if expression is None
+                else expression & start_expression
+            )
+        if selected_end is not None:
+            end_value = datetime.combine(
+                selected_end + timedelta(days=1),
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            )
+            end_expression = ds.field(datetime_column) < pa.scalar(
+                end_value,
+                type=pa.timestamp("ns", tz="UTC"),
+            )
+            expression = (
+                end_expression
+                if expression is None
+                else expression & end_expression
+            )
+    return expression
+
+
+def read_partitioned_source_slice(
+    source_key: str,
+    manifest: dict[str, Any],
+    selected_vessels: list[str] | None,
+    selected_start: date,
+    selected_end: date,
+    *,
+    row_limit: int | None,
+) -> tuple[pd.DataFrame, int, bool]:
+    entries = _partition_entries_for_period(
+        manifest,
+        selected_start,
+        selected_end,
+    )
+    files = [
+        str(partition_entry_path(entry, "file"))
+        for entry in entries
+        if partition_entry_path(entry, "file").is_file()
+    ]
+    if not files:
+        return pd.DataFrame(), 0, False
+    dataset = ds.dataset(files, format="parquet")
+    schema_names = list(dataset.schema.names)
+    expression = _dataset_filter_expression(
+        source_key,
+        schema_names,
+        selected_vessels,
+        selected_start,
+        selected_end,
+    )
+    try:
+        matching_rows = int(dataset.count_rows(filter=expression))
+    except Exception:
+        matching_rows = sum(
+            int(entry.get("rows", 0) or 0)
+            for entry in entries
+        )
+    truncated = row_limit is not None and matching_rows > row_limit
+    try:
+        table = (
+            dataset.head(row_limit, filter=expression)
+            if truncated and row_limit is not None
+            else dataset.to_table(filter=expression)
+        )
+        frame = table.to_pandas()
+        del table
+    except Exception:
+        frames: list[pd.DataFrame] = []
+        remaining = row_limit
+        for file_name in files:
+            parquet_file = pq.ParquetFile(file_name)
+            for batch in parquet_file.iter_batches(batch_size=50_000):
+                batch_frame = batch.to_pandas()
+                batch_frame = filter_wide_source_data(
+                    batch_frame,
+                    source_key,
+                    selected_vessels or [],
+                    selected_start,
+                    selected_end,
+                )
+                if batch_frame.empty:
+                    continue
+                if remaining is not None:
+                    batch_frame = batch_frame.head(remaining)
+                    remaining -= len(batch_frame)
+                frames.append(batch_frame)
+                if remaining is not None and remaining <= 0:
+                    break
+            if remaining is not None and remaining <= 0:
+                break
+        frame = (
+            pd.concat(frames, ignore_index=True, sort=False)
+            if frames
+            else pd.DataFrame(columns=schema_names)
+        )
+    return frame, matching_rows, truncated
+
+
+def load_wide_source_for_view(
+    source_key: str,
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    start_date: date,
+    refresh: bool,
+    selected_vessels: list[str] | None = None,
+    selected_start: date | None = None,
+    selected_end: date | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if refresh:
+        refresh_source_snapshot(
+            source_key,
+            username,
+            password,
+            token,
+            auth_method,
+            full_refresh=False,
+        )
+    requested_signature = atlas_source_signature(
+        source_key,
+        username,
+        auth_method,
+        start_date,
+    )
+    manifest = read_source_manifest(source_key)
+    if not source_manifest_is_valid(
+        source_key,
+        manifest,
+        requested_signature,
+        start_date,
+    ):
+        migrated = ensure_source_snapshot(
+            source_key,
+            username,
+            auth_method,
+        )
+        manifest = (
+            read_source_manifest(source_key)
+            if migrated is not None
+            else None
+        )
+    if not source_manifest_is_valid(
+        source_key,
+        manifest,
+        requested_signature,
+        start_date,
+    ):
+        config = SOURCE_CONFIGS[source_key]
+        return pd.DataFrame(), {
+            "source": config["label"],
+            "endpoint": str(config["endpoint"]),
+            "loaded_at_local": "No prepared snapshot yet",
+            "rows": 0,
+            "needs_warmup": True,
+        }
+    assert manifest is not None
+    selected_start = selected_start or start_date
+    selected_end = selected_end or date.today()
+    row_limit = (
+        ATLAS_RAW_INTERACTIVE_ROW_LIMIT
+        if source_key == "shippivots"
+        else ATLAS_REPORTPIVOTS_INTERACTIVE_ROW_LIMIT
+    )
+    frame, matching_rows, truncated = read_partitioned_source_slice(
+        source_key,
+        manifest,
+        selected_vessels,
+        selected_start,
+        selected_end,
+        row_limit=row_limit,
+    )
+    metadata = dict(manifest.get("metadata") or {})
+    metadata["loaded_from_snapshot"] = True
+    metadata["snapshot_generation"] = manifest.get("generation")
+    metadata["snapshot_saved_at_utc"] = manifest.get(
+        "saved_at_utc",
+        "-",
+    )
+    metadata["view_rows_matching"] = int(matching_rows)
+    metadata["view_rows_loaded"] = int(len(frame))
+    metadata["view_truncated"] = bool(truncated)
+    metadata["interactive_row_limit"] = int(row_limit)
+    return frame, metadata
+
+
+def render_wide_source_tab(
+    source_label: str,
+    df: pd.DataFrame,
+    metadata: dict[str, Any],
+    source_key: str,
+    selected_vessels: list[str],
+    selected_start: date,
+    selected_end: date,
+) -> pd.DataFrame:
+    st.markdown(
+        f'<div class="section-title">{escape(source_label)} Dataset</div>',
+        unsafe_allow_html=True,
+    )
+    render_api_load_caption(metadata)
+    filtered_df = filter_wide_source_data(
+        df,
+        source_key,
+        selected_vessels,
+        selected_start,
+        selected_end,
+    )
+    matching_rows = int(
+        metadata.get("view_rows_matching", len(filtered_df)) or 0
+    )
+    render_metric_cards(
+        [
+            ("Rows in selection", f"{matching_rows:,}", "table_eye"),
+            ("Rows loaded", f"{len(filtered_df):,}", "checked_columns"),
+            (
+                "Stored source rows",
+                f"{int(metadata.get('rows', 0) or 0):,}",
+                "database_rows",
+            ),
+            (
+                "Monthly partitions",
+                f"{int(metadata.get('partition_count', 0) or 0):,}",
+                "numeric",
+            ),
+        ]
+    )
+    if metadata.get("view_truncated"):
+        st.warning(
+            f"The raw selection contains {matching_rows:,} rows. AtlasFlow "
+            f"loaded the first {int(metadata.get('interactive_row_limit', 0) or 0):,} "
+            "rows to protect Streamlit Cloud memory. Use Monthly Comparison for "
+            "complete all-vessel monthly analysis, or narrow the raw detail period."
+        )
+    default_columns = [
+        column
+        for column in [
+            "ShipName",
+            "DateTime",
+            "State",
+            "StateName",
+            "GPSSpeed",
+            "LogSpeed",
+            "MEConsumed",
+            "ShaftPower",
+        ]
+        if column in filtered_df.columns
+    ]
+    if not default_columns:
+        default_columns = list(
+            filtered_df.columns[: min(12, len(filtered_df.columns))]
+        )
+    selected_columns = st.multiselect(
+        f"{source_label} columns to preview/export",
+        options=list(filtered_df.columns),
+        default=default_columns,
+        key=f"{source_key}_preview_columns",
+    )
+    output = (
+        filtered_df[selected_columns].copy()
+        if selected_columns
+        else filtered_df.copy()
+    )
+    render_preview_table(output)
+    if len(output) > TABLE_PREVIEW_ROW_LIMIT:
+        st.caption(
+            f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of "
+            f"{len(output):,} loaded rows."
+        )
+    return output
+
+
+def load_monthly_comparison_data(
+    username: str,
+    auth_method: str,
+    selected_vessels: list[str],
+    selected_start: date,
+    selected_end: date,
+) -> tuple[
+    pd.DataFrame,
+    dict[str, dict[str, Any]],
+    list[str],
+]:
+    summary_files: list[str] = []
+    generation_parts: list[str] = []
+    source_metadata: dict[str, dict[str, Any]] = {}
+    missing_sources: list[str] = []
+    wanted_months = set(
+        month_keys_for_range(
+            selected_start,
+            selected_end + timedelta(days=1),
+        )
+    )
+    for source_key in ["reportdata", "reportpivots", "shippivots"]:
+        requested_signature = atlas_source_signature(
+            source_key,
+            username,
+            auth_method,
+            API_FULL_START_DATE,
+        )
+        manifest = read_source_manifest(source_key)
+        if not source_manifest_is_valid(
+            source_key,
+            manifest,
+            requested_signature,
+            API_FULL_START_DATE,
+        ):
+            missing_sources.append(COMPARISON_SOURCE_LABELS[source_key])
+            continue
+        assert manifest is not None
+        source_metadata[source_key] = dict(
+            manifest.get("metadata") or {}
+        )
+        generation_parts.append(
+            f"{source_key}:{manifest.get('generation')}"
+        )
+        for month_key, entry in manifest_partitions(manifest).items():
+            if month_key not in wanted_months:
+                continue
+            summary_path = partition_entry_path(entry, "summary_file")
+            if summary_path.is_file():
+                summary_files.append(str(summary_path))
+    comparison = cached_read_monthly_summary_files(
+        "|".join(generation_parts),
+        tuple(sorted(summary_files)),
+    )
+    if (
+        not comparison.empty
+        and selected_vessels
+        and "ShipName" in comparison.columns
+    ):
+        comparison = comparison[
+            match_selected_vessels(
+                comparison["ShipName"],
+                selected_vessels,
+            )
+        ].copy()
+    return comparison, source_metadata, missing_sources
+
+
+def render_monthly_comparison_workspace(
+    username: str,
+    auth_method: str,
+    selected_vessels: list[str],
+    selected_start: date,
+    selected_end: date,
+) -> None:
+    st.markdown(
+        '<div class="section-title">Monthly Cross-Source Comparison</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "This workspace compares all selected vessels from prepared monthly "
+        "summaries. It never loads the full 15-minute history into the browser."
+    )
+    comparison_df, source_metadata, missing_sources = (
+        load_monthly_comparison_data(
+            username,
+            auth_method,
+            selected_vessels,
+            selected_start,
+            selected_end,
+        )
+    )
+    if missing_sources:
+        st.warning(
+            "Prepared monthly summaries are not available yet for: "
+            + ", ".join(missing_sources)
+            + ". Run those source warmups."
+        )
+    if comparison_df.empty:
+        st.info(
+            "No prepared monthly comparison rows match the selected vessels "
+            "and period."
+        )
+        return
+
+    available_months = sorted(
+        comparison_df["Month"].dropna().astype(str).unique().tolist(),
+        reverse=True,
+    )
+    complete_months = sorted(
+        comparison_df.loc[
+            comparison_df.get("Month Complete", False).fillna(False).astype(bool),
+            "Month",
+        ].dropna().astype(str).unique().tolist(),
+        reverse=True,
+    ) if "Month Complete" in comparison_df.columns else available_months
+    default_months = complete_months or available_months[:1]
+    selected_months = st.multiselect(
+        "Calendar months",
+        options=available_months,
+        default=default_months,
+        key="atlas_monthly_comparison_months",
+        help=(
+            "Monthly comparison always uses complete calendar-month summaries. "
+            "The current partial month can be selected explicitly when needed."
+        ),
+    )
+    if selected_months:
+        comparison_df = comparison_df[
+            comparison_df["Month"].astype(str).isin(selected_months)
+        ].copy()
+
+    with st.expander("Source freshness and storage", expanded=False):
+        freshness_rows = []
+        for source_key, source_meta in source_metadata.items():
+            freshness_rows.append(
+                {
+                    "Source": COMPARISON_SOURCE_LABELS[source_key],
+                    "Last API load": source_meta.get("loaded_at_local", "-"),
+                    "Latest source date": source_meta.get("latest_source_date", "-"),
+                    "Stored rows": int(source_meta.get("rows", 0) or 0),
+                    "Monthly partitions": int(source_meta.get("partition_count", 0) or 0),
+                    "Refresh mode": source_meta.get("refresh_mode", "-"),
+                }
+            )
+        if freshness_rows:
+            st.dataframe(pd.DataFrame(freshness_rows), use_container_width=True, hide_index=True)
+
+    available_sources = sorted(
+        comparison_df["Source"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+    selected_sources = st.multiselect(
+        "Sources to compare",
+        options=available_sources,
+        default=available_sources,
+        key="atlas_monthly_comparison_sources",
+    )
+    if selected_sources:
+        comparison_df = comparison_df[
+            comparison_df["Source"].isin(selected_sources)
+        ].copy()
+    metric_options = [
+        metric
+        for metric in MONTHLY_COMPARISON_METRICS
+        if metric in comparison_df.columns
+        and pd.to_numeric(
+            comparison_df[metric],
+            errors="coerce",
+        ).notna().any()
+    ]
+    if not metric_options:
+        st.info(
+            "The prepared source summaries do not yet share a standardized "
+            "numeric metric."
+        )
+        return
+    metric = st.selectbox(
+        "Standardized metric",
+        options=metric_options,
+        key="atlas_monthly_comparison_metric",
+    )
+    view_mode = st.radio(
+        "Comparison view",
+        options=[
+            "Side-by-side",
+            "Source rows",
+            "Data quality",
+            "Metric mapping",
+        ],
+        horizontal=True,
+        key="atlas_monthly_comparison_view",
+    )
+    render_metric_cards(
+        [
+            (
+                "Vessels",
+                f"{comparison_df['ShipName'].nunique():,}",
+                "table_eye",
+            ),
+            (
+                "Months",
+                f"{comparison_df['Month'].nunique():,}",
+                "checked_columns",
+            ),
+            (
+                "Sources",
+                f"{comparison_df['Source'].nunique():,}",
+                "database_rows",
+            ),
+            (
+                "Monthly source rows",
+                f"{len(comparison_df):,}",
+                "numeric",
+            ),
+        ]
+    )
+
+    if view_mode == "Side-by-side":
+        displayed = comparison_df.pivot_table(
+            index=["Month", "ShipName"],
+            columns="Source",
+            values=metric,
+            aggfunc="first",
+        ).reset_index()
+        source_columns = [
+            source
+            for source in available_sources
+            if source in displayed.columns
+        ]
+        if source_columns:
+            numeric_block = displayed[source_columns].apply(
+                pd.to_numeric,
+                errors="coerce",
+            )
+            displayed["Source Range"] = (
+                numeric_block.max(axis=1)
+                - numeric_block.min(axis=1)
+            )
+            displayed["Source Mean"] = numeric_block.mean(axis=1)
+            displayed["Relative Range [%]"] = (
+                displayed["Source Range"]
+                / displayed["Source Mean"].replace(0, pd.NA)
+                * 100
+            ).round(2)
+        displayed = displayed.sort_values(
+            ["Month", "ShipName"],
+            ascending=[False, True],
+        )
+    elif view_mode == "Data quality":
+        quality_columns = [
+            column
+            for column in [
+                "Month",
+                "ShipName",
+                "Source",
+                "Records",
+                "Observed Days",
+                "Period Days",
+                "Month Complete",
+                "Day Coverage [%]",
+                "Observation Coverage [%]",
+                "First Timestamp",
+                "Last Timestamp",
+            ]
+            if column in comparison_df.columns
+        ]
+        displayed = comparison_df[quality_columns].sort_values(
+            ["Month", "ShipName", "Source"],
+            ascending=[False, True, True],
+        )
+    elif view_mode == "Metric mapping":
+        mapping_column = f"Mapping: {metric}"
+        mapping_columns = [
+            column
+            for column in ["Source", mapping_column]
+            if column in comparison_df.columns
+        ]
+        displayed = (
+            comparison_df[mapping_columns]
+            .drop_duplicates()
+            .sort_values("Source")
+        )
+    else:
+        source_columns = [
+            column
+            for column in [
+                "Month",
+                "ShipName",
+                "Source",
+                metric,
+                "Records",
+                "Day Coverage [%]",
+                "Observation Coverage [%]",
+                f"Mapping: {metric}",
+            ]
+            if column in comparison_df.columns
+        ]
+        displayed = comparison_df[source_columns].sort_values(
+            ["Month", "ShipName", "Source"],
+            ascending=[False, True, True],
+        )
+
+    st.dataframe(
+        format_display_dataframe(displayed),
+        use_container_width=True,
+        hide_index=True,
+    )
+    export_signature = sha256(
+        "|".join(
+            [
+                metric,
+                view_mode,
+                selected_start.isoformat(),
+                selected_end.isoformat(),
+                ",".join(selected_vessels),
+                ",".join(selected_sources),
+                str(len(displayed)),
+            ]
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        st.session_state.get("atlas_monthly_export_signature")
+        != export_signature
+    ):
+        st.session_state.pop("atlas_monthly_export_bytes", None)
+    if st.button(
+        "Prepare monthly comparison Excel",
+        type="primary",
+        disabled=displayed.empty,
+    ):
+        with st.spinner("Preparing monthly comparison workbook..."):
+            st.session_state["atlas_monthly_export_bytes"] = (
+                to_displayed_table_excel_bytes(
+                    displayed,
+                    sheet_name="Monthly Comparison",
+                )
+            )
+            st.session_state[
+                "atlas_monthly_export_signature"
+            ] = export_signature
+    if (
+        st.session_state.get("atlas_monthly_export_signature")
+        == export_signature
+        and "atlas_monthly_export_bytes" in st.session_state
+    ):
+        st.download_button(
+            "Download monthly comparison Excel",
+            data=st.session_state["atlas_monthly_export_bytes"],
+            file_name="atlasflow_monthly_comparison.xlsx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        )
+
+
 # =============================================================================
 # Warmup
 # =============================================================================
@@ -5203,6 +6930,7 @@ def run_warmup_if_requested() -> None:
                 "last_api_load_local": metadata.get("loaded_at_local", "-"),
                 "rows": int(metadata.get("rows", 0) or 0),
                 "columns": int(metadata.get("columns", 0) or 0),
+                "monthly_partitions": int(metadata.get("partition_count", 0) or 0),
                 "api_pages_last_refresh": int(metadata.get("pages", 0) or 0),
                 "refresh_api_start_date": metadata.get("refresh_api_start_date", "-"),
                 "refresh_skipped_due_to_lock": bool(metadata.get("refresh_skipped_due_to_lock", False)),
@@ -5416,6 +7144,7 @@ def main() -> None:
         identity_columns = ["ShipName"]
 
     workspace_options = [
+        "Monthly Comparison",
         "Custom Analytics",
         "Noon & Manual Reports",
         "15-Minute Operations",
@@ -5432,7 +7161,7 @@ def main() -> None:
     workspace = get_tab_selection(
         "workspace",
         workspace_options,
-        st.session_state.get("atlas_workspace", "Custom Analytics"),
+        st.session_state.get("atlas_workspace", "Monthly Comparison"),
     )
     workspace = render_text_tab_bar(
         workspace_options,
@@ -5464,39 +7193,48 @@ def main() -> None:
             "The loaded dataset may be incomplete. Check API Diagnostics before using the export."
         )
 
-    if not selected_variables:
-        st.info("Select one or more variables from the sidebar to build the AtlasFlow pivot table.")
+    if workspace == "Monthly Comparison":
+        # The comparison workspace reads pre-aggregated monthly summaries and
+        # does not need to build the report-level pivot or its filter controls.
+        pivot_df = pd.DataFrame()
+        filtered_pivot_df = pd.DataFrame()
+        filter_specs: list[dict[str, Any]] = []
+        display_columns: list[str] = []
+        output_df = pd.DataFrame()
+    else:
+        if not selected_variables:
+            st.info("Select one or more variables from the sidebar to build the AtlasFlow pivot table.")
 
-    pivot_df = build_pivot_table(filtered_long_for_options, tuple(selected_variables))
+        pivot_df = build_pivot_table(filtered_long_for_options, tuple(selected_variables))
 
-    filter_column_options = [column for column in [*identity_columns, *selected_variables] if column in pivot_df.columns]
-    with st.sidebar.expander("Filters for displayed columns", expanded=False):
-        st.caption("Choose columns to filter. Selected variables are already part of the displayed table.")
-        previous_filter_columns = st.session_state.get("atlas_columns_to_filter", [])
-        if not isinstance(previous_filter_columns, list):
-            previous_filter_columns = []
-        valid_filter_columns = [column for column in previous_filter_columns if column in filter_column_options]
-        if valid_filter_columns != previous_filter_columns:
-            st.session_state["atlas_columns_to_filter"] = valid_filter_columns
+        filter_column_options = [column for column in [*identity_columns, *selected_variables] if column in pivot_df.columns]
+        with st.sidebar.expander("Filters for displayed columns", expanded=False):
+            st.caption("Choose columns to filter. Selected variables are already part of the displayed table.")
+            previous_filter_columns = st.session_state.get("atlas_columns_to_filter", [])
+            if not isinstance(previous_filter_columns, list):
+                previous_filter_columns = []
+            valid_filter_columns = [column for column in previous_filter_columns if column in filter_column_options]
+            if valid_filter_columns != previous_filter_columns:
+                st.session_state["atlas_columns_to_filter"] = valid_filter_columns
 
-        columns_to_filter = st.multiselect(
-            "Columns to filter",
-            options=filter_column_options,
-            default=valid_filter_columns,
-            key="atlas_columns_to_filter",
-        )
-        filter_specs = render_column_filters(pivot_df, columns_to_filter)
+            columns_to_filter = st.multiselect(
+                "Columns to filter",
+                options=filter_column_options,
+                default=valid_filter_columns,
+                key="atlas_columns_to_filter",
+            )
+            filter_specs = render_column_filters(pivot_df, columns_to_filter)
 
-    filtered_pivot_df = apply_column_filters(pivot_df, filter_specs)
+        filtered_pivot_df = apply_column_filters(pivot_df, filter_specs)
 
-    display_columns = []
-    for column in [*identity_columns, *selected_variables]:
-        if column in filtered_pivot_df.columns and column not in display_columns:
-            display_columns.append(column)
-    if not display_columns:
-        display_columns = [column for column in DEFAULT_DISPLAY_IDENTITY_COLUMNS if column in filtered_pivot_df.columns]
+        display_columns = []
+        for column in [*identity_columns, *selected_variables]:
+            if column in filtered_pivot_df.columns and column not in display_columns:
+                display_columns.append(column)
+        if not display_columns:
+            display_columns = [column for column in DEFAULT_DISPLAY_IDENTITY_COLUMNS if column in filtered_pivot_df.columns]
 
-    output_df = filtered_pivot_df[display_columns].copy()
+        output_df = filtered_pivot_df[display_columns].copy()
 
     # Shared Custom Analytics preview/export configuration. It is only fully rendered in
     # Custom Analytics, but Export Center can reuse the saved choices.
@@ -5518,7 +7256,16 @@ def main() -> None:
         ]).encode("utf-8")
     ).hexdigest()
 
-    if workspace == "Custom Analytics":
+    if workspace == "Monthly Comparison":
+        render_monthly_comparison_workspace(
+            username,
+            auth_method,
+            selected_vessels,
+            selected_start,
+            selected_end,
+        )
+
+    elif workspace == "Custom Analytics":
         st.markdown('<div class="section-title">Custom Analytics Preview & Export</div>', unsafe_allow_html=True)
 
         summary_builder_columns = [column for column in output_df.columns]
@@ -5673,7 +7420,8 @@ def main() -> None:
 
     elif workspace == "Noon & Manual Reports":
         reportpivots_df, reportpivots_metadata = load_wide_source_for_view(
-            "reportpivots", username, password, token, auth_method, api_start_date, refresh
+            "reportpivots", username, password, token, auth_method, api_start_date, refresh,
+            selected_vessels, selected_start, selected_end
         )
         if reportpivots_metadata.get("needs_warmup"):
             st.info("No ReportPivots snapshot is available yet. Run the ReportPivots warmup URL first.")
@@ -5691,7 +7439,8 @@ def main() -> None:
 
     elif workspace == "15-Minute Operations":
         shippivots_df, shippivots_metadata = load_wide_source_for_view(
-            "shippivots", username, password, token, auth_method, api_start_date, refresh
+            "shippivots", username, password, token, auth_method, api_start_date, refresh,
+            selected_vessels, selected_start, selected_end
         )
         if shippivots_metadata.get("needs_warmup"):
             st.info("No ShipPivots snapshot is available yet. Run the ShipPivots warmup URL first.")
@@ -5719,7 +7468,8 @@ def main() -> None:
             analysis_df = output_df.copy()
         elif selected_source == "Noon & Manual Reports":
             source_df, source_metadata = load_wide_source_for_view(
-                "reportpivots", username, password, token, auth_method, api_start_date, refresh
+                "reportpivots", username, password, token, auth_method, api_start_date, refresh,
+                selected_vessels, selected_start, selected_end
             )
             if source_metadata.get("needs_warmup"):
                 st.info("No ReportPivots snapshot is available yet. Run the ReportPivots warmup URL first.")
@@ -5727,7 +7477,8 @@ def main() -> None:
             analysis_df = build_wide_source_output_for_export("reportpivots", source_df, selected_vessels, selected_start, selected_end)
         else:
             source_df, source_metadata = load_wide_source_for_view(
-                "shippivots", username, password, token, auth_method, api_start_date, refresh
+                "shippivots", username, password, token, auth_method, api_start_date, refresh,
+                selected_vessels, selected_start, selected_end
             )
             if source_metadata.get("needs_warmup"):
                 st.info("No ShipPivots snapshot is available yet. Run the ShipPivots warmup URL first.")
@@ -5810,10 +7561,12 @@ def main() -> None:
         if st.button("Prepare full AtlasFlow workbook", type="primary"):
             with st.spinner("Loading source snapshots and preparing workbook..."):
                 reportpivots_df, reportpivots_metadata = load_wide_source_for_view(
-                    "reportpivots", username, password, token, auth_method, api_start_date, refresh=False
+                    "reportpivots", username, password, token, auth_method, api_start_date, refresh=False,
+                    selected_vessels=selected_vessels, selected_start=selected_start, selected_end=selected_end
                 )
                 shippivots_df, shippivots_metadata = load_wide_source_for_view(
-                    "shippivots", username, password, token, auth_method, api_start_date, refresh=False
+                    "shippivots", username, password, token, auth_method, api_start_date, refresh=False,
+                    selected_vessels=selected_vessels, selected_start=selected_start, selected_end=selected_end
                 )
                 reportpivots_output_df = build_wide_source_output_for_export(
                     "reportpivots", reportpivots_df, selected_vessels, selected_start, selected_end
