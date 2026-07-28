@@ -6513,12 +6513,25 @@ def render_wide_source_tab(
     selected_start: date,
     selected_end: date,
 ) -> pd.DataFrame:
+    """Render ReportPivots/ShipPivots with the same three-view structure as Custom Analytics.
+
+    This is a presentation-layer change only. The API warmup, monthly partitions,
+    manifests, incremental refresh, and memory safeguards remain unchanged.
+    """
     st.markdown(
-        f'<div class="section-title">{escape(source_label)} Dataset</div>',
+        f'<div class="section-title">{escape(source_label)} Preview & Export</div>',
         unsafe_allow_html=True,
     )
+    st.caption(
+        "Choose which table you want to preview and export. Clean Dataset uses the "
+        "selected source columns, Summary Analysis aggregates that cleaned table, and "
+        "Source Data shows all available API columns for the loaded vessel/date slice."
+    )
     render_api_load_caption(metadata)
-    filtered_df = filter_wide_source_data(
+
+    # The partition reader already applies vessel/date predicate pushdown. Keep the
+    # defensive in-memory filter so migrated/legacy snapshots behave identically.
+    source_df = filter_wide_source_data(
         df,
         source_key,
         selected_vessels,
@@ -6526,31 +6539,21 @@ def render_wide_source_tab(
         selected_end,
     )
     matching_rows = int(
-        metadata.get("view_rows_matching", len(filtered_df)) or 0
+        metadata.get("view_rows_matching", len(source_df)) or 0
     )
-    render_metric_cards(
-        [
-            ("Rows in selection", f"{matching_rows:,}", "table_eye"),
-            ("Rows loaded", f"{len(filtered_df):,}", "checked_columns"),
-            (
-                "Stored source rows",
-                f"{int(metadata.get('rows', 0) or 0):,}",
-                "database_rows",
-            ),
-            (
-                "Monthly partitions",
-                f"{int(metadata.get('partition_count', 0) or 0):,}",
-                "numeric",
-            ),
-        ]
+    interactive_limit = int(
+        metadata.get("interactive_row_limit", len(source_df)) or len(source_df)
     )
+
     if metadata.get("view_truncated"):
         st.warning(
-            f"The raw selection contains {matching_rows:,} rows. AtlasFlow "
-            f"loaded the first {int(metadata.get('interactive_row_limit', 0) or 0):,} "
-            "rows to protect Streamlit Cloud memory. Use Monthly Comparison for "
-            "complete all-vessel monthly analysis, or narrow the raw detail period."
+            f"The selected source contains {matching_rows:,} rows. AtlasFlow loaded "
+            f"the first {interactive_limit:,} rows to protect Streamlit Cloud memory. "
+            "Clean Dataset, Source Data, and Summary Analysis below use the loaded "
+            "rows. Narrow the vessel/date selection for a complete raw-detail summary, "
+            "or use Monthly Comparison for complete all-vessel monthly analysis."
         )
+
     default_columns = [
         column
         for column in [
@@ -6563,31 +6566,244 @@ def render_wide_source_tab(
             "MEConsumed",
             "ShaftPower",
         ]
-        if column in filtered_df.columns
+        if column in source_df.columns
     ]
     if not default_columns:
         default_columns = list(
-            filtered_df.columns[: min(12, len(filtered_df.columns))]
+            source_df.columns[: min(12, len(source_df.columns))]
         )
+
+    state_columns_key = f"{source_key}_preview_columns"
+    previous_columns = st.session_state.get(state_columns_key, default_columns)
+    if not isinstance(previous_columns, list):
+        previous_columns = default_columns
+    valid_previous_columns = [
+        column for column in previous_columns if column in source_df.columns
+    ]
+    if not valid_previous_columns:
+        valid_previous_columns = default_columns
+    if valid_previous_columns != previous_columns:
+        st.session_state[state_columns_key] = valid_previous_columns
+
     selected_columns = st.multiselect(
-        f"{source_label} columns to preview/export",
-        options=list(filtered_df.columns),
-        default=default_columns,
-        key=f"{source_key}_preview_columns",
+        f"{source_label} columns to include",
+        options=list(source_df.columns),
+        default=valid_previous_columns,
+        key=state_columns_key,
+        help=(
+            "These columns define Clean Dataset and the available fields in Summary "
+            "Analysis. Source Data always retains all available API columns."
+        ),
     )
-    output = (
-        filtered_df[selected_columns].copy()
+    if not selected_columns:
+        selected_columns = default_columns
+
+    clean_df = (
+        source_df[selected_columns].copy()
         if selected_columns
-        else filtered_df.copy()
+        else source_df.copy()
     )
-    render_preview_table(output)
-    if len(output) > TABLE_PREVIEW_ROW_LIMIT:
+
+    preview_options = ["Clean Dataset", "Summary Analysis", "Source Data"]
+    preview_state_key = f"atlas_{source_key}_preview_mode"
+    preview_mode = get_tab_selection(
+        f"{source_key}_preview",
+        preview_options,
+        st.session_state.get(preview_state_key, "Clean Dataset"),
+    )
+    preview_mode = render_text_tab_bar(
+        preview_options,
+        preview_mode,
+        param_name=f"{source_key}_preview",
+        css_class="compact",
+    )
+    st.session_state[preview_state_key] = preview_mode
+
+    summary_group_fields: list[str] = []
+    summary_value_fields: list[str] = []
+    aggregation_options = [
+        "Average",
+        "Sum",
+        "Count",
+        "Minimum",
+        "Maximum",
+        "Median",
+    ]
+    aggregation_key = f"atlas_{source_key}_summary_aggregation"
+    summary_aggregation = st.session_state.get(aggregation_key, "Average")
+    if summary_aggregation not in aggregation_options:
+        summary_aggregation = "Average"
+
+    if preview_mode == "Summary Analysis":
+        st.markdown(
+            '<div class="section-title">Summary Builder</div>',
+            unsafe_allow_html=True,
+        )
+        summary_value_options = numeric_column_options(clean_df)
+        group_key = f"atlas_{source_key}_summary_groups"
+        value_key = f"atlas_{source_key}_summary_values"
+
+        previous_groups = st.session_state.get(group_key, [])
+        if not isinstance(previous_groups, list):
+            previous_groups = []
+        valid_groups = [
+            column for column in previous_groups if column in clean_df.columns
+        ]
+        if not valid_groups and group_key not in st.session_state:
+            valid_groups = [
+                column
+                for column in ["ShipName", "ReportType", "State", "StateName"]
+                if column in clean_df.columns
+            ][:2]
+        if valid_groups != previous_groups:
+            st.session_state[group_key] = valid_groups
+
+        previous_values = st.session_state.get(value_key, [])
+        if not isinstance(previous_values, list):
+            previous_values = []
+        valid_values = [
+            column
+            for column in previous_values
+            if column in summary_value_options
+        ]
+        if valid_values != previous_values:
+            st.session_state[value_key] = valid_values
+
+        builder_cols = st.columns(3)
+        with builder_cols[0]:
+            summary_group_fields = st.multiselect(
+                "Group by fields",
+                options=list(clean_df.columns),
+                default=valid_groups,
+                key=group_key,
+                help="Choose the fields that define each summary row.",
+            )
+        with builder_cols[1]:
+            summary_value_fields = st.multiselect(
+                "Value fields",
+                options=summary_value_options,
+                default=valid_values,
+                key=value_key,
+                help="Choose one or more numeric source columns to aggregate.",
+            )
+        with builder_cols[2]:
+            summary_aggregation = st.selectbox(
+                "Aggregation",
+                options=aggregation_options,
+                index=aggregation_options.index(summary_aggregation),
+                key=aggregation_key,
+            )
+    else:
+        stored_groups = st.session_state.get(
+            f"atlas_{source_key}_summary_groups",
+            [],
+        )
+        stored_values = st.session_state.get(
+            f"atlas_{source_key}_summary_values",
+            [],
+        )
+        summary_group_fields = stored_groups if isinstance(stored_groups, list) else []
+        summary_value_fields = stored_values if isinstance(stored_values, list) else []
+
+    export_sheet_name = "Clean Dataset"
+    if preview_mode == "Summary Analysis":
+        if summary_group_fields and summary_value_fields:
+            displayed_table_df = build_summary_analysis(
+                clean_df,
+                group_fields=summary_group_fields,
+                value_fields=summary_value_fields,
+                aggregation=summary_aggregation,
+            )
+        else:
+            displayed_table_df = pd.DataFrame()
+            st.info(
+                "Select at least one Group by field and one Value field to preview Summary Analysis."
+            )
+        export_sheet_name = "Summary Analysis"
+    elif preview_mode == "Source Data":
+        displayed_table_df = source_df.copy()
+        export_sheet_name = "Source Data"
+    else:
+        displayed_table_df = clean_df.copy()
+
+    render_metric_cards(
+        [
+            ("Displayed Rows", f"{len(displayed_table_df):,}", "table_eye"),
+            ("Selected Columns", f"{len(selected_columns):,}", "checked_columns"),
+            ("Rows in Selection", f"{matching_rows:,}", "database_rows"),
+            ("Available Columns", f"{len(source_df.columns):,}", "columns_plus"),
+        ]
+    )
+
+    render_preview_table(displayed_table_df)
+    if len(displayed_table_df) > TABLE_PREVIEW_ROW_LIMIT:
         st.caption(
             f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of "
-            f"{len(output):,} loaded rows."
+            f"{len(displayed_table_df):,} loaded rows. Excel export includes the "
+            "full displayed table currently held by the app."
         )
-    return output
 
+    export_signature_payload = "|".join(
+        [
+            source_key,
+            preview_mode,
+            ",".join(selected_vessels),
+            selected_start.isoformat(),
+            selected_end.isoformat(),
+            ",".join(selected_columns),
+            str(len(source_df)),
+            str(matching_rows),
+            str(len(displayed_table_df)),
+            ",".join(summary_group_fields),
+            ",".join(summary_value_fields),
+            summary_aggregation,
+            ",".join(displayed_table_df.columns.astype(str).tolist())
+            if not displayed_table_df.empty
+            else "empty",
+        ]
+    )
+    export_signature = sha256(
+        export_signature_payload.encode("utf-8")
+    ).hexdigest()
+    signature_key = f"atlas_{source_key}_display_export_signature"
+    bytes_key = f"atlas_{source_key}_display_export_bytes"
+    if st.session_state.get(signature_key) != export_signature:
+        st.session_state.pop(bytes_key, None)
+
+    export_ready = (
+        st.session_state.get(signature_key) == export_signature
+        and bytes_key in st.session_state
+    )
+    if st.button(
+        f"Prepare {source_label} displayed table Excel",
+        type="primary",
+        disabled=displayed_table_df.empty,
+        key=f"atlas_{source_key}_prepare_displayed_excel",
+    ):
+        with st.spinner("Preparing Excel file..."):
+            st.session_state[bytes_key] = to_displayed_table_excel_bytes(
+                displayed_table_df,
+                sheet_name=export_sheet_name,
+            )
+            st.session_state[signature_key] = export_signature
+            gc.collect()
+        export_ready = True
+
+    if export_ready:
+        st.download_button(
+            f"Download {source_label} displayed table Excel",
+            data=st.session_state[bytes_key],
+            file_name=f"atlasflow_{source_key}_{slugify_tab_label(preview_mode)}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"atlas_{source_key}_download_displayed_excel",
+        )
+    else:
+        st.caption(
+            "Excel generation is prepared on demand. The download contains only "
+            "the table shown by the selected sub-tab."
+        )
+
+    return displayed_table_df
 
 def load_monthly_comparison_data(
     username: str,
