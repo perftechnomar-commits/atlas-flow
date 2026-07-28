@@ -2564,17 +2564,42 @@ def build_pivot_table(filtered_long_df: pd.DataFrame, selected_variables: tuple[
 
 
 def format_display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a display-safe copy without inserting text into nullable numeric columns.
+
+    Some selected variables can be completely empty for the active vessel/period.
+    Pandas keeps those columns as nullable numeric dtypes, where a global
+    ``fillna("-")`` raises a TypeError. Convert each display column to strings
+    first, then replace missing values column by column.
+    """
     display_df = df.copy()
-    for column in ["StartDateTimeGMT", "EndDateTimeGMT"]:
-        if column in display_df.columns:
-            display_df[column] = pd.to_datetime(display_df[column], errors="coerce").dt.strftime(DISPLAY_DATETIME_FORMAT)
+    identity_columns = {
+        "ReportId",
+        "ShipName",
+        "ReportType",
+        "StartDateTimeGMT",
+        "EndDateTimeGMT",
+        "StateName",
+    }
+
     for column in display_df.columns:
-        if column in {"ReportId", "ShipName", "ReportType", "StartDateTimeGMT", "EndDateTimeGMT", "StateName"}:
+        series = display_df[column]
+
+        if column in {"StartDateTimeGMT", "EndDateTimeGMT"}:
+            formatted = pd.to_datetime(series, errors="coerce").dt.strftime(DISPLAY_DATETIME_FORMAT)
+            display_df[column] = formatted.astype("string").fillna("-")
             continue
-        values = pd.to_numeric(display_df[column], errors="coerce")
-        if values.notna().any():
-            display_df[column] = values.map(lambda value: "-" if pd.isna(value) else f"{value:,.3f}")
-    return display_df.fillna("-")
+
+        if column not in identity_columns:
+            numeric_values = pd.to_numeric(series, errors="coerce")
+            if numeric_values.notna().any():
+                display_df[column] = numeric_values.map(
+                    lambda value: "-" if pd.isna(value) else f"{value:,.3f}"
+                ).astype("string")
+                continue
+
+        display_df[column] = series.astype("string").fillna("-")
+
+    return display_df
 
 
 METRIC_ICON_SVGS = {
