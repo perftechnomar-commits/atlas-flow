@@ -6886,6 +6886,36 @@ def load_monthly_comparison_data(
     return comparison, source_metadata, missing_sources
 
 
+def to_simplified_monthly_comparison_excel_bytes(
+    availability_df: pd.DataFrame,
+    detail_df: pd.DataFrame,
+    mapping_df: pd.DataFrame,
+) -> bytes:
+    """Export the simplified monthly comparison as one clear workbook."""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        write_table_sheet(
+            writer,
+            availability_df,
+            "Data Availability",
+            "AtlasMonthlyAvailability",
+        )
+        write_table_sheet(
+            writer,
+            detail_df,
+            "Monthly Values",
+            "AtlasMonthlyValues",
+        )
+        if mapping_df is not None and not mapping_df.empty:
+            write_table_sheet(
+                writer,
+                mapping_df,
+                "Field Mapping",
+                "AtlasMonthlyMapping",
+            )
+    return output.getvalue()
+
+
 def render_monthly_comparison_workspace(
     username: str,
     auth_method: str,
@@ -6893,14 +6923,29 @@ def render_monthly_comparison_workspace(
     selected_start: date,
     selected_end: date,
 ) -> None:
+    """Render a single, clear cross-source monthly comparison.
+
+    Users select standardized fields once. AtlasFlow then keeps all three API
+    sources visible and shows both data availability and the monthly values
+    side by side. This is a presentation-only change; prepared summaries,
+    monthly partitions, warmups, and API refresh logic remain unchanged.
+    """
     st.markdown(
-        '<div class="section-title">Monthly Cross-Source Comparison</div>',
+        '<div class="section-title">Monthly Comparison</div>',
         unsafe_allow_html=True,
     )
     st.caption(
-        "This workspace compares all selected vessels from prepared monthly "
-        "summaries. It never loads the full 15-minute history into the browser."
+        "Select the fields to compare once. AtlasFlow checks the same standardized "
+        "field across ReportData, ReportPivots, and ShipPivots, then shows where "
+        "data exists and the monthly values side by side."
     )
+    st.markdown(
+        f'<div class="atlas-pill"><span>Period used:</span> '
+        f'{selected_start.strftime("%d/%m/%Y")} to '
+        f'{selected_end.strftime("%d/%m/%Y")}</div>',
+        unsafe_allow_html=True,
+    )
+
     comparison_df, source_metadata, missing_sources = (
         load_monthly_comparison_data(
             username,
@@ -6910,12 +6955,14 @@ def render_monthly_comparison_workspace(
             selected_end,
         )
     )
+
     if missing_sources:
         st.warning(
             "Prepared monthly summaries are not available yet for: "
             + ", ".join(missing_sources)
-            + ". Run those source warmups."
+            + ". The comparison keeps those source columns visible as No data."
         )
+
     if comparison_df.empty:
         st.info(
             "No prepared monthly comparison rows match the selected vessels "
@@ -6923,32 +6970,235 @@ def render_monthly_comparison_workspace(
         )
         return
 
-    available_months = sorted(
+    source_order = [
+        COMPARISON_SOURCE_LABELS["reportdata"],
+        COMPARISON_SOURCE_LABELS["reportpivots"],
+        COMPARISON_SOURCE_LABELS["shippivots"],
+    ]
+
+    metric_options = [
+        metric
+        for metric in MONTHLY_COMPARISON_METRICS
+        if metric in comparison_df.columns
+        and pd.to_numeric(comparison_df[metric], errors="coerce").notna().any()
+    ]
+    if not metric_options:
+        st.info(
+            "The prepared source summaries do not yet contain a standardized "
+            "numeric field for this period."
+        )
+        return
+
+    state_key = "atlas_monthly_comparison_fields"
+    previous_metrics = st.session_state.get(state_key, metric_options)
+    if not isinstance(previous_metrics, list):
+        previous_metrics = metric_options
+    valid_previous_metrics = [
+        metric for metric in previous_metrics if metric in metric_options
+    ]
+    if not valid_previous_metrics:
+        valid_previous_metrics = metric_options
+    if valid_previous_metrics != previous_metrics:
+        st.session_state[state_key] = valid_previous_metrics
+
+    selected_metrics = st.multiselect(
+        "Fields to compare",
+        options=metric_options,
+        default=valid_previous_metrics,
+        key=state_key,
+        help=(
+            "These are standardized comparison fields. Each selected field is "
+            "checked against all three API source summaries automatically."
+        ),
+    )
+    if not selected_metrics:
+        st.info("Select at least one field to display the comparison.")
+        return
+
+    month_values = sorted(
         comparison_df["Month"].dropna().astype(str).unique().tolist(),
         reverse=True,
     )
-    complete_months = sorted(
-        comparison_df.loc[
-            comparison_df.get("Month Complete", False).fillna(False).astype(bool),
-            "Month",
-        ].dropna().astype(str).unique().tolist(),
-        reverse=True,
-    ) if "Month Complete" in comparison_df.columns else available_months
-    default_months = complete_months or available_months[:1]
-    selected_months = st.multiselect(
-        "Calendar months",
-        options=available_months,
-        default=default_months,
-        key="atlas_monthly_comparison_months",
-        help=(
-            "Monthly comparison always uses complete calendar-month summaries. "
-            "The current partial month can be selected explicitly when needed."
-        ),
+    vessel_month_pairs = (
+        comparison_df[["Month", "ShipName"]]
+        .dropna(subset=["Month", "ShipName"])
+        .drop_duplicates()
     )
-    if selected_months:
-        comparison_df = comparison_df[
-            comparison_df["Month"].astype(str).isin(selected_months)
+    expected_pairs = max(len(vessel_month_pairs), 1)
+
+    render_metric_cards(
+        [
+            ("Selected Fields", f"{len(selected_metrics):,}", "checked_columns"),
+            ("Vessels", f"{comparison_df['ShipName'].nunique():,}", "table_eye"),
+            ("Months", f"{len(month_values):,}", "numeric"),
+            ("API Sources", "3", "database_rows"),
+        ]
+    )
+
+    availability_rows: list[dict[str, Any]] = []
+    mapping_rows: list[dict[str, Any]] = []
+    detail_frames: list[pd.DataFrame] = []
+
+    for metric in selected_metrics:
+        metric_values = pd.to_numeric(comparison_df[metric], errors="coerce")
+        metric_source_df = comparison_df[
+            [column for column in ["Month", "ShipName", "Source", metric] if column in comparison_df.columns]
         ].copy()
+        metric_source_df[metric] = metric_values
+
+        availability_row: dict[str, Any] = {"Field": metric}
+        mapping_row: dict[str, Any] = {"Field": metric}
+        sources_with_data = 0
+
+        for source in source_order:
+            source_mask = metric_source_df["Source"].astype("string").eq(source)
+            source_values = pd.to_numeric(
+                metric_source_df.loc[source_mask, metric],
+                errors="coerce",
+            )
+            source_pairs = (
+                metric_source_df.loc[
+                    source_mask & source_values.notna(),
+                    ["Month", "ShipName"],
+                ]
+                .drop_duplicates()
+            )
+            available_count = int(len(source_pairs))
+            if available_count > 0:
+                sources_with_data += 1
+                availability_row[source] = (
+                    f"Available ({available_count:,}/{expected_pairs:,})"
+                )
+            else:
+                availability_row[source] = "No data"
+
+            mapping_column = f"Mapping: {metric}"
+            mapping_value = "-"
+            if mapping_column in comparison_df.columns:
+                mapped_values = (
+                    comparison_df.loc[
+                        comparison_df["Source"].astype("string").eq(source),
+                        mapping_column,
+                    ]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                )
+                mapped_values = mapped_values[mapped_values.ne("")].drop_duplicates()
+                if not mapped_values.empty:
+                    mapping_value = " | ".join(mapped_values.tolist())
+            mapping_row[source] = mapping_value
+
+        if sources_with_data == 3:
+            availability_status = "All 3 sources"
+        elif sources_with_data == 2:
+            availability_status = "2 of 3 sources"
+        elif sources_with_data == 1:
+            availability_status = "1 of 3 sources"
+        else:
+            availability_status = "No source data"
+
+        availability_row["Availability"] = availability_status
+        availability_rows.append(availability_row)
+        mapping_rows.append(mapping_row)
+
+        pivoted = metric_source_df.pivot_table(
+            index=["Month", "ShipName"],
+            columns="Source",
+            values=metric,
+            aggfunc="first",
+        ).reset_index()
+        pivoted.columns.name = None
+        for source in source_order:
+            if source not in pivoted.columns:
+                pivoted[source] = pd.NA
+        pivoted.insert(2, "Field", metric)
+
+        numeric_sources = pivoted[source_order].apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
+        source_counts = numeric_sources.notna().sum(axis=1)
+        pivoted["Data availability"] = source_counts.map(
+            {
+                3: "All 3 sources",
+                2: "2 of 3 sources",
+                1: "1 of 3 sources",
+                0: "No source data",
+            }
+        )
+        pivoted = pivoted[source_counts.gt(0)].copy()
+        detail_frames.append(
+            pivoted[
+                [
+                    "Month",
+                    "ShipName",
+                    "Field",
+                    *source_order,
+                    "Data availability",
+                ]
+            ]
+        )
+
+    availability_df = pd.DataFrame(availability_rows)[
+        ["Field", *source_order, "Availability"]
+    ]
+    mapping_df = pd.DataFrame(mapping_rows)[
+        ["Field", *source_order]
+    ]
+    detail_df = (
+        pd.concat(detail_frames, ignore_index=True, sort=False)
+        if detail_frames
+        else pd.DataFrame(
+            columns=[
+                "Month",
+                "ShipName",
+                "Field",
+                *source_order,
+                "Data availability",
+            ]
+        )
+    )
+    if not detail_df.empty:
+        detail_df = detail_df.sort_values(
+            ["Month", "ShipName", "Field"],
+            ascending=[False, True, True],
+        ).reset_index(drop=True)
+
+    st.markdown(
+        '<div class="section-title">Data availability by field</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Available (x/y) shows how many vessel-month combinations contain a "
+        "numeric value in each API source for the selected period."
+    )
+    st.dataframe(
+        availability_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown(
+        '<div class="section-title">Monthly values side by side</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Each row is one vessel, one month, and one selected field. A blank cell "
+        "means that source has no numeric value for that field and vessel-month."
+    )
+    st.dataframe(
+        format_display_dataframe(detail_df),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Field mapping used by each API source", expanded=False):
+        st.caption(
+            "This shows the original source field or component mapping used to "
+            "produce each standardized comparison field."
+        )
+        st.dataframe(mapping_df, use_container_width=True, hide_index=True)
 
     with st.expander("Source freshness and storage", expanded=False):
         freshness_rows = []
@@ -6964,217 +7214,44 @@ def render_monthly_comparison_workspace(
                 }
             )
         if freshness_rows:
-            st.dataframe(pd.DataFrame(freshness_rows), use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(freshness_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
 
-    available_sources = sorted(
-        comparison_df["Source"]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
-    )
-    selected_sources = st.multiselect(
-        "Sources to compare",
-        options=available_sources,
-        default=available_sources,
-        key="atlas_monthly_comparison_sources",
-    )
-    if selected_sources:
-        comparison_df = comparison_df[
-            comparison_df["Source"].isin(selected_sources)
-        ].copy()
-    metric_options = [
-        metric
-        for metric in MONTHLY_COMPARISON_METRICS
-        if metric in comparison_df.columns
-        and pd.to_numeric(
-            comparison_df[metric],
-            errors="coerce",
-        ).notna().any()
-    ]
-    if not metric_options:
-        st.info(
-            "The prepared source summaries do not yet share a standardized "
-            "numeric metric."
-        )
-        return
-    metric = st.selectbox(
-        "Standardized metric",
-        options=metric_options,
-        key="atlas_monthly_comparison_metric",
-    )
-    view_mode = st.radio(
-        "Comparison view",
-        options=[
-            "Side-by-side",
-            "Source rows",
-            "Data quality",
-            "Metric mapping",
-        ],
-        horizontal=True,
-        key="atlas_monthly_comparison_view",
-    )
-    render_metric_cards(
-        [
-            (
-                "Vessels",
-                f"{comparison_df['ShipName'].nunique():,}",
-                "table_eye",
-            ),
-            (
-                "Months",
-                f"{comparison_df['Month'].nunique():,}",
-                "checked_columns",
-            ),
-            (
-                "Sources",
-                f"{comparison_df['Source'].nunique():,}",
-                "database_rows",
-            ),
-            (
-                "Monthly source rows",
-                f"{len(comparison_df):,}",
-                "numeric",
-            ),
-        ]
-    )
-
-    if view_mode == "Side-by-side":
-        displayed = comparison_df.pivot_table(
-            index=["Month", "ShipName"],
-            columns="Source",
-            values=metric,
-            aggfunc="first",
-        ).reset_index()
-        source_columns = [
-            source
-            for source in available_sources
-            if source in displayed.columns
-        ]
-        if source_columns:
-            numeric_block = displayed[source_columns].apply(
-                pd.to_numeric,
-                errors="coerce",
-            )
-            displayed["Source Range"] = (
-                numeric_block.max(axis=1)
-                - numeric_block.min(axis=1)
-            )
-            displayed["Source Mean"] = numeric_block.mean(axis=1)
-            source_range = pd.to_numeric(
-                displayed["Source Range"],
-                errors="coerce",
-            )
-            source_mean = pd.to_numeric(
-                displayed["Source Mean"],
-                errors="coerce",
-            )
-            # Keep this calculation on a native floating dtype. Replacing zero
-            # with pd.NA can coerce the Series to object dtype, and object
-            # Series may raise TypeError when pandas applies round().
-            safe_source_mean = source_mean.where(source_mean.ne(0))
-            displayed["Relative Range [%]"] = (
-                source_range.div(safe_source_mean).mul(100).round(2)
-            )
-        displayed = displayed.sort_values(
-            ["Month", "ShipName"],
-            ascending=[False, True],
-        )
-    elif view_mode == "Data quality":
-        quality_columns = [
-            column
-            for column in [
-                "Month",
-                "ShipName",
-                "Source",
-                "Records",
-                "Observed Days",
-                "Period Days",
-                "Month Complete",
-                "Day Coverage [%]",
-                "Observation Coverage [%]",
-                "First Timestamp",
-                "Last Timestamp",
-            ]
-            if column in comparison_df.columns
-        ]
-        displayed = comparison_df[quality_columns].sort_values(
-            ["Month", "ShipName", "Source"],
-            ascending=[False, True, True],
-        )
-    elif view_mode == "Metric mapping":
-        mapping_column = f"Mapping: {metric}"
-        mapping_columns = [
-            column
-            for column in ["Source", mapping_column]
-            if column in comparison_df.columns
-        ]
-        displayed = (
-            comparison_df[mapping_columns]
-            .drop_duplicates()
-            .sort_values("Source")
-        )
-    else:
-        source_columns = [
-            column
-            for column in [
-                "Month",
-                "ShipName",
-                "Source",
-                metric,
-                "Records",
-                "Day Coverage [%]",
-                "Observation Coverage [%]",
-                f"Mapping: {metric}",
-            ]
-            if column in comparison_df.columns
-        ]
-        displayed = comparison_df[source_columns].sort_values(
-            ["Month", "ShipName", "Source"],
-            ascending=[False, True, True],
-        )
-
-    st.dataframe(
-        format_display_dataframe(displayed),
-        use_container_width=True,
-        hide_index=True,
-    )
     export_signature = sha256(
         "|".join(
             [
-                metric,
-                view_mode,
                 selected_start.isoformat(),
                 selected_end.isoformat(),
                 ",".join(selected_vessels),
-                ",".join(selected_sources),
-                str(len(displayed)),
+                ",".join(selected_metrics),
+                str(len(availability_df)),
+                str(len(detail_df)),
             ]
         ).encode("utf-8")
     ).hexdigest()
-    if (
-        st.session_state.get("atlas_monthly_export_signature")
-        != export_signature
-    ):
+    if st.session_state.get("atlas_monthly_export_signature") != export_signature:
         st.session_state.pop("atlas_monthly_export_bytes", None)
+
     if st.button(
         "Prepare monthly comparison Excel",
         type="primary",
-        disabled=displayed.empty,
+        disabled=detail_df.empty,
     ):
         with st.spinner("Preparing monthly comparison workbook..."):
             st.session_state["atlas_monthly_export_bytes"] = (
-                to_displayed_table_excel_bytes(
-                    displayed,
-                    sheet_name="Monthly Comparison",
+                to_simplified_monthly_comparison_excel_bytes(
+                    availability_df,
+                    detail_df,
+                    mapping_df,
                 )
             )
-            st.session_state[
-                "atlas_monthly_export_signature"
-            ] = export_signature
+            st.session_state["atlas_monthly_export_signature"] = export_signature
+
     if (
-        st.session_state.get("atlas_monthly_export_signature")
-        == export_signature
+        st.session_state.get("atlas_monthly_export_signature") == export_signature
         and "atlas_monthly_export_bytes" in st.session_state
     ):
         st.download_button(
