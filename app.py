@@ -6916,6 +6916,540 @@ def to_simplified_monthly_comparison_excel_bytes(
     return output.getvalue()
 
 
+
+
+_DYNAMIC_COMPARISON_EXCLUDED_FIELDS = {
+    "id",
+    "reportid",
+    "shipname",
+    "datetime",
+    "startdatetimegmt",
+    "enddatetimegmt",
+    "reportdatetime",
+    "timestamp",
+    "imo",
+    "imono",
+    "mmsi",
+    "companyname",
+    "latitude",
+    "longitude",
+    "voyageid",
+    "voyageidinternal",
+}
+
+
+def _candidate_name_from_list(
+    available_names: list[str],
+    candidates: list[str],
+) -> str | None:
+    normalized = {normalize_text(name): str(name) for name in available_names}
+    for candidate in candidates:
+        match = normalized.get(normalize_text(candidate))
+        if match is not None:
+            return match
+    for candidate in candidates:
+        candidate_key = normalize_text(candidate)
+        if len(candidate_key) < 6:
+            continue
+        for available_key, original_name in normalized.items():
+            if candidate_key in available_key or available_key in candidate_key:
+                return original_name
+    return None
+
+
+def _dynamic_aggregation(field_name: str) -> str:
+    """Choose a conservative monthly aggregation for a raw source field."""
+    key = normalize_text(field_name)
+    latest_tokens = (
+        "rob",
+        "remaining",
+        "onboard",
+        "counter",
+        "totalizer",
+        "cumulative",
+        "opening",
+        "closing",
+    )
+    sum_tokens = (
+        "consum",
+        "fuel",
+        "distance",
+        "runninghours",
+        "operatinghours",
+        "steamingtime",
+        "energy",
+        "emission",
+        "quantity",
+        "received",
+        "bunkered",
+        "production",
+    )
+    if any(token in key for token in latest_tokens):
+        return "latest"
+    if any(token in key for token in sum_tokens):
+        return "sum"
+    return "mean"
+
+
+def _aggregation_label(aggregation: str) -> str:
+    return {
+        "sum": "Sum",
+        "mean": "Average",
+        "latest": "Latest value",
+        "min": "Minimum",
+        "max": "Maximum",
+    }.get(str(aggregation), str(aggregation).title())
+
+
+def _source_files_for_comparison(
+    manifest: dict[str, Any],
+    selected_start: date,
+    selected_end: date,
+) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
+    entries = _partition_entries_for_period(
+        manifest,
+        selected_start,
+        selected_end,
+    )
+    files = tuple(
+        str(partition_entry_path(entry, "file"))
+        for entry in entries
+        if partition_entry_path(entry, "file").is_file()
+    )
+    return entries, files
+
+
+@st.cache_data(show_spinner=False)
+def cached_reportdata_field_names(
+    generation_signature: str,
+    partition_files: tuple[str, ...],
+    resolved_vessels: tuple[str, ...],
+    selected_start: date,
+    selected_end: date,
+) -> list[str]:
+    del generation_signature
+    if not partition_files:
+        return []
+    dataset = ds.dataset(list(partition_files), format="parquet")
+    schema_names = list(dataset.schema.names)
+    required = [
+        column
+        for column in ["ShipName", "StartDateTimeGMT", "ValueDescription"]
+        if column in schema_names
+    ]
+    if "ValueDescription" not in required:
+        return []
+    expression = _dataset_filter_expression(
+        "reportdata",
+        schema_names,
+        list(resolved_vessels),
+        selected_start,
+        selected_end,
+    )
+    values: set[str] = set()
+    scanner = dataset.scanner(
+        columns=required,
+        filter=expression,
+        batch_size=100_000,
+    )
+    for batch in scanner.to_batches():
+        frame = batch.to_pandas()
+        if "ValueDescription" not in frame.columns:
+            continue
+        descriptions = (
+            frame["ValueDescription"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+        values.update(descriptions[descriptions.ne("")].tolist())
+    return sorted(values, key=str.casefold)
+
+
+def build_dynamic_comparison_catalog(
+    source_fields: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    """Build standardized plus raw fields from the three current API schemas."""
+    catalog: list[dict[str, Any]] = []
+    used_labels: set[str] = set()
+
+    # Keep the approved standardized fields first because these have explicit,
+    # trusted source aliases and aggregation rules.
+    for label, spec in MONTHLY_COMPARISON_METRICS.items():
+        mappings: dict[str, list[str]] = {}
+        for source_key in ["reportdata", "reportpivots", "shippivots"]:
+            available = source_fields.get(source_key, [])
+            matched = _candidate_name_from_list(
+                available,
+                list(spec.get("candidates") or []),
+            )
+            if matched is not None:
+                mappings[source_key] = [matched]
+                continue
+            if source_key == "reportdata":
+                components = [
+                    value
+                    for value in list(spec.get("component_candidates") or [])
+                    if normalize_text(value)
+                    in {normalize_text(name) for name in available}
+                ]
+                if components:
+                    mappings[source_key] = components
+        if mappings:
+            catalog.append(
+                {
+                    "label": label,
+                    "aggregation": str(spec.get("aggregation", "mean")),
+                    "mappings": mappings,
+                    "standardized": True,
+                }
+            )
+            used_labels.add(label.casefold())
+
+    # Group raw fields by normalized name. Exact normalized matches are treated
+    # as the same field across APIs; source-only fields remain selectable too.
+    grouped: dict[str, dict[str, str]] = {}
+    for source_key in ["reportdata", "reportpivots", "shippivots"]:
+        for raw_name in source_fields.get(source_key, []):
+            if source_key != "reportdata" and normalize_text(raw_name) in _DYNAMIC_COMPARISON_EXCLUDED_FIELDS:
+                continue
+            key = normalize_text(raw_name)
+            if not key:
+                continue
+            grouped.setdefault(key, {})[source_key] = str(raw_name)
+
+    source_preference = ["reportdata", "reportpivots", "shippivots"]
+    raw_entries: list[dict[str, Any]] = []
+    for mappings_by_source in grouped.values():
+        display_name = next(
+            mappings_by_source[source]
+            for source in source_preference
+            if source in mappings_by_source
+        )
+        label = display_name
+        if label.casefold() in used_labels:
+            label = f"{label} (source field)"
+        suffix = 2
+        base_label = label
+        while label.casefold() in used_labels:
+            label = f"{base_label} {suffix}"
+            suffix += 1
+        used_labels.add(label.casefold())
+        raw_entries.append(
+            {
+                "label": label,
+                "aggregation": _dynamic_aggregation(display_name),
+                "mappings": {
+                    source: [raw_name]
+                    for source, raw_name in mappings_by_source.items()
+                },
+                "standardized": False,
+            }
+        )
+
+    raw_entries.sort(key=lambda entry: str(entry["label"]).casefold())
+    catalog.extend(raw_entries)
+    return catalog
+
+
+def _update_dynamic_group_state(
+    states: dict[tuple[str, str, str], dict[str, Any]],
+    frame: pd.DataFrame,
+    field_label: str,
+    raw_values: pd.Series,
+    numeric_values: pd.Series,
+    datetime_column: str,
+) -> None:
+    if frame.empty:
+        return
+    work = pd.DataFrame(
+        {
+            "Month": pd.to_datetime(
+                frame[datetime_column], errors="coerce", utc=True
+            ).dt.to_period("M").astype("string"),
+            "ShipName": frame["ShipName"].astype("string"),
+            "Timestamp": pd.to_datetime(
+                frame[datetime_column], errors="coerce", utc=True
+            ),
+            "RawValue": raw_values,
+            "NumericValue": numeric_values,
+        },
+        index=frame.index,
+    )
+    work = work[
+        work["Month"].notna()
+        & work["ShipName"].notna()
+        & work["Timestamp"].notna()
+    ].copy()
+    if work.empty:
+        return
+    raw_text = work["RawValue"].astype("string").str.strip()
+    work["Present"] = work["RawValue"].notna() & raw_text.ne("")
+
+    grouped = work.groupby(["Month", "ShipName"], dropna=False)
+    present_counts = grouped["Present"].sum()
+    numeric_counts = grouped["NumericValue"].count()
+    numeric_sums = grouped["NumericValue"].sum(min_count=1)
+    numeric_mins = grouped["NumericValue"].min()
+    numeric_maxs = grouped["NumericValue"].max()
+
+    latest_rows = (
+        work[work["NumericValue"].notna()]
+        .sort_values("Timestamp")
+        .groupby(["Month", "ShipName"], dropna=False)
+        .tail(1)
+        .set_index(["Month", "ShipName"])
+    )
+
+    for pair, present_count in present_counts.items():
+        month_value, ship_value = str(pair[0]), str(pair[1])
+        state = states.setdefault(
+            (month_value, ship_value, field_label),
+            {
+                "PresentValues": 0,
+                "NumericValues": 0,
+                "Sum": 0.0,
+                "Minimum": None,
+                "Maximum": None,
+                "LatestTimestamp": None,
+                "LatestValue": None,
+            },
+        )
+        state["PresentValues"] += int(present_count or 0)
+        count = int(numeric_counts.get(pair, 0) or 0)
+        state["NumericValues"] += count
+        if count:
+            batch_sum = numeric_sums.get(pair)
+            if pd.notna(batch_sum):
+                state["Sum"] += float(batch_sum)
+            batch_min = numeric_mins.get(pair)
+            batch_max = numeric_maxs.get(pair)
+            if pd.notna(batch_min):
+                state["Minimum"] = (
+                    float(batch_min)
+                    if state["Minimum"] is None
+                    else min(float(state["Minimum"]), float(batch_min))
+                )
+            if pd.notna(batch_max):
+                state["Maximum"] = (
+                    float(batch_max)
+                    if state["Maximum"] is None
+                    else max(float(state["Maximum"]), float(batch_max))
+                )
+        if pair in latest_rows.index:
+            latest_row = latest_rows.loc[pair]
+            if isinstance(latest_row, pd.DataFrame):
+                latest_row = latest_row.iloc[-1]
+            latest_timestamp = latest_row["Timestamp"]
+            if (
+                state["LatestTimestamp"] is None
+                or latest_timestamp > state["LatestTimestamp"]
+            ):
+                state["LatestTimestamp"] = latest_timestamp
+                state["LatestValue"] = float(latest_row["NumericValue"])
+
+
+@st.cache_data(show_spinner=False)
+def cached_dynamic_source_aggregates(
+    source_key: str,
+    generation_signature: str,
+    partition_files: tuple[str, ...],
+    resolved_vessels: tuple[str, ...],
+    selected_start: date,
+    selected_end: date,
+    field_specs: tuple[tuple[str, str, tuple[str, ...]], ...],
+) -> pd.DataFrame:
+    """Aggregate only selected fields directly from monthly Parquet partitions."""
+    del generation_signature
+    if not partition_files or not field_specs:
+        return pd.DataFrame()
+    dataset = ds.dataset(list(partition_files), format="parquet")
+    schema_names = list(dataset.schema.names)
+    datetime_column = source_primary_datetime_column(source_key)
+    if datetime_column not in schema_names or "ShipName" not in schema_names:
+        return pd.DataFrame()
+
+    base_expression = _dataset_filter_expression(
+        source_key,
+        schema_names,
+        list(resolved_vessels),
+        selected_start,
+        selected_end,
+    )
+    states: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    if source_key == "reportdata":
+        required = [
+            column
+            for column in [
+                "ShipName",
+                datetime_column,
+                "ReportId",
+                "ValueDescription",
+                "ParsedValue",
+                "ReportedValue",
+            ]
+            if column in schema_names
+        ]
+        if "ValueDescription" not in required:
+            return pd.DataFrame()
+        raw_to_specs: dict[str, list[tuple[str, str]]] = {}
+        for field_label, aggregation, mappings in field_specs:
+            for raw_name in mappings:
+                raw_to_specs.setdefault(str(raw_name), []).append(
+                    (field_label, aggregation)
+                )
+        raw_names = list(raw_to_specs)
+        expression = base_expression
+        if raw_names:
+            value_expression = ds.field("ValueDescription").isin(raw_names)
+            expression = (
+                value_expression
+                if expression is None
+                else expression & value_expression
+            )
+        seen_report_values: set[tuple[str, str, str]] = set()
+        scanner = dataset.scanner(
+            columns=required,
+            filter=expression,
+            batch_size=100_000,
+        )
+        for batch in scanner.to_batches():
+            frame = batch.to_pandas()
+            for raw_name, spec_pairs in raw_to_specs.items():
+                subset = frame[
+                    frame["ValueDescription"].astype("string").eq(raw_name)
+                ].copy()
+                if subset.empty:
+                    continue
+                if "ReportId" in subset.columns:
+                    keep_mask = []
+                    for report_id in subset["ReportId"].astype("string"):
+                        if pd.isna(report_id) or str(report_id) in {"", "<NA>"}:
+                            keep_mask.append(True)
+                            continue
+                        dedup_key = (raw_name, str(report_id), str(len(keep_mask)))
+                        simple_key = (raw_name, str(report_id), "value")
+                        if simple_key in seen_report_values:
+                            keep_mask.append(False)
+                        else:
+                            seen_report_values.add(simple_key)
+                            keep_mask.append(True)
+                    subset = subset.loc[keep_mask].copy()
+                raw_series = (
+                    subset["ReportedValue"]
+                    if "ReportedValue" in subset.columns
+                    else subset.get("ParsedValue", pd.Series(index=subset.index, dtype="object"))
+                )
+                numeric_series = (
+                    pd.to_numeric(subset["ParsedValue"], errors="coerce")
+                    if "ParsedValue" in subset.columns
+                    else parse_numeric_series(raw_series)
+                )
+                for field_label, _aggregation in spec_pairs:
+                    _update_dynamic_group_state(
+                        states,
+                        subset,
+                        field_label,
+                        raw_series,
+                        numeric_series,
+                        datetime_column,
+                    )
+    else:
+        source_columns = sorted(
+            {
+                raw_name
+                for _, _, mappings in field_specs
+                for raw_name in mappings
+                if raw_name in schema_names
+            }
+        )
+        columns = ["ShipName", datetime_column, *source_columns]
+        scanner = dataset.scanner(
+            columns=columns,
+            filter=base_expression,
+            batch_size=100_000,
+        )
+        for batch in scanner.to_batches():
+            frame = batch.to_pandas()
+            for field_label, _aggregation, mappings in field_specs:
+                for raw_name in mappings:
+                    if raw_name not in frame.columns:
+                        continue
+                    raw_series = frame[raw_name]
+                    numeric_series = parse_numeric_series(raw_series)
+                    _update_dynamic_group_state(
+                        states,
+                        frame,
+                        field_label,
+                        raw_series,
+                        numeric_series,
+                        datetime_column,
+                    )
+
+    aggregation_by_field = {
+        field_label: aggregation
+        for field_label, aggregation, _ in field_specs
+    }
+    rows: list[dict[str, Any]] = []
+    for (month_value, ship_value, field_label), state in states.items():
+        aggregation = aggregation_by_field.get(field_label, "mean")
+        count = int(state["NumericValues"] or 0)
+        value: float | None = None
+        if count > 0:
+            if aggregation == "sum":
+                value = float(state["Sum"])
+            elif aggregation == "latest":
+                value = state["LatestValue"]
+            elif aggregation == "min":
+                value = state["Minimum"]
+            elif aggregation == "max":
+                value = state["Maximum"]
+            else:
+                value = float(state["Sum"]) / count
+        rows.append(
+            {
+                "Month": month_value,
+                "ShipName": ship_value,
+                "Field": field_label,
+                "Value": round(value, 3) if value is not None else pd.NA,
+                "NumericValues": count,
+                "PresentValues": int(state["PresentValues"] or 0),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def to_dynamic_monthly_comparison_excel_bytes(
+    availability_df: pd.DataFrame,
+    detail_df: pd.DataFrame,
+    mapping_df: pd.DataFrame,
+) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        write_table_sheet(
+            writer,
+            availability_df,
+            "Data Availability",
+            "AtlasDynamicAvailability",
+        )
+        if detail_df is not None and not detail_df.empty:
+            write_table_sheet(
+                writer,
+                detail_df,
+                "Monthly Values",
+                "AtlasDynamicMonthlyValues",
+            )
+        if mapping_df is not None and not mapping_df.empty:
+            write_table_sheet(
+                writer,
+                mapping_df,
+                "Field Mapping",
+                "AtlasDynamicMapping",
+            )
+    return output.getvalue()
+
+
 def render_monthly_comparison_workspace(
     username: str,
     auth_method: str,
@@ -6923,21 +7457,15 @@ def render_monthly_comparison_workspace(
     selected_start: date,
     selected_end: date,
 ) -> None:
-    """Render a single, clear cross-source monthly comparison.
-
-    Users select standardized fields once. AtlasFlow then keeps all three API
-    sources visible and shows both data availability and the monthly values
-    side by side. This is a presentation-only change; prepared summaries,
-    monthly partitions, warmups, and API refresh logic remain unchanged.
-    """
+    """Compare every available API field, not only a fixed metric dictionary."""
     st.markdown(
         '<div class="section-title">Monthly Comparison</div>',
         unsafe_allow_html=True,
     )
     st.caption(
-        "Select the fields to compare once. AtlasFlow checks the same standardized "
-        "field across ReportData, ReportPivots, and ShipPivots, then shows where "
-        "data exists and the monthly values side by side."
+        "Select any field found in ReportData, ReportPivots, or ShipPivots. "
+        "AtlasFlow shows the original source mapping, whether data exists in "
+        "the selected period, and monthly numeric values side by side."
     )
     st.markdown(
         f'<div class="atlas-pill"><span>Period used:</span> '
@@ -6946,263 +7474,344 @@ def render_monthly_comparison_workspace(
         unsafe_allow_html=True,
     )
 
-    comparison_df, source_metadata, missing_sources = (
-        load_monthly_comparison_data(
+    source_order_keys = ["reportdata", "reportpivots", "shippivots"]
+    source_order = [COMPARISON_SOURCE_LABELS[key] for key in source_order_keys]
+    contexts: dict[str, dict[str, Any]] = {}
+    source_fields: dict[str, list[str]] = {}
+    source_metadata: dict[str, dict[str, Any]] = {}
+    missing_sources: list[str] = []
+
+    for source_key in source_order_keys:
+        requested_signature = atlas_source_signature(
+            source_key,
             username,
             auth_method,
-            selected_vessels,
+            API_FULL_START_DATE,
+        )
+        manifest = read_source_manifest(source_key)
+        if not source_manifest_is_valid(
+            source_key,
+            manifest,
+            requested_signature,
+            API_FULL_START_DATE,
+        ):
+            missing_sources.append(COMPARISON_SOURCE_LABELS[source_key])
+            source_fields[source_key] = []
+            continue
+        assert manifest is not None
+        entries, files = _source_files_for_comparison(
+            manifest,
             selected_start,
             selected_end,
         )
-    )
+        if not files:
+            source_fields[source_key] = []
+            continue
+        dataset = ds.dataset(list(files), format="parquet")
+        resolved_vessels = _resolve_partition_vessel_names(
+            dataset,
+            entries,
+            selected_vessels,
+        ) or selected_vessels
+        contexts[source_key] = {
+            "manifest": manifest,
+            "entries": entries,
+            "files": files,
+            "resolved_vessels": tuple(resolved_vessels or []),
+            "generation": str(manifest.get("generation", "")),
+        }
+        metadata = dict(manifest.get("metadata") or {})
+        metadata["partition_count"] = len(manifest_partitions(manifest))
+        source_metadata[source_key] = metadata
+        if source_key == "reportdata":
+            source_fields[source_key] = cached_reportdata_field_names(
+                str(manifest.get("generation", "")),
+                files,
+                tuple(resolved_vessels or []),
+                selected_start,
+                selected_end,
+            )
+        else:
+            source_fields[source_key] = [
+                str(column) for column in dataset.schema.names
+            ]
 
     if missing_sources:
         st.warning(
-            "Prepared monthly summaries are not available yet for: "
+            "Prepared monthly partitions are not available yet for: "
             + ", ".join(missing_sources)
-            + ". The comparison keeps those source columns visible as No data."
+            + ". Those sources remain visible as No data."
         )
 
-    if comparison_df.empty:
-        st.info(
-            "No prepared monthly comparison rows match the selected vessels "
-            "and period."
-        )
+    catalog = build_dynamic_comparison_catalog(source_fields)
+    if not catalog:
+        st.info("No API fields were found for the selected period and sources.")
         return
 
-    source_order = [
-        COMPARISON_SOURCE_LABELS["reportdata"],
-        COMPARISON_SOURCE_LABELS["reportpivots"],
-        COMPARISON_SOURCE_LABELS["shippivots"],
-    ]
+    catalog_by_label = {str(entry["label"]): entry for entry in catalog}
+    field_options = list(catalog_by_label)
+    standardized_defaults = [
+        str(entry["label"])
+        for entry in catalog
+        if entry.get("standardized")
+    ][:8]
+    if not standardized_defaults:
+        standardized_defaults = field_options[: min(8, len(field_options))]
 
-    metric_options = [
-        metric
-        for metric in MONTHLY_COMPARISON_METRICS
-        if metric in comparison_df.columns
-        and pd.to_numeric(comparison_df[metric], errors="coerce").notna().any()
-    ]
-    if not metric_options:
-        st.info(
-            "The prepared source summaries do not yet contain a standardized "
-            "numeric field for this period."
-        )
-        return
+    state_key = "atlas_monthly_dynamic_fields"
+    previous = st.session_state.get(state_key, standardized_defaults)
+    if not isinstance(previous, list):
+        previous = standardized_defaults
+    valid_previous = [field for field in previous if field in catalog_by_label]
+    if not valid_previous:
+        valid_previous = standardized_defaults
+    if valid_previous != previous:
+        st.session_state[state_key] = valid_previous
 
-    state_key = "atlas_monthly_comparison_fields"
-    previous_metrics = st.session_state.get(state_key, metric_options)
-    if not isinstance(previous_metrics, list):
-        previous_metrics = metric_options
-    valid_previous_metrics = [
-        metric for metric in previous_metrics if metric in metric_options
-    ]
-    if not valid_previous_metrics:
-        valid_previous_metrics = metric_options
-    if valid_previous_metrics != previous_metrics:
-        st.session_state[state_key] = valid_previous_metrics
-
-    selected_metrics = st.multiselect(
+    selected_fields = st.multiselect(
         "Fields to compare",
-        options=metric_options,
-        default=valid_previous_metrics,
+        options=field_options,
+        default=valid_previous,
         key=state_key,
         help=(
-            "These are standardized comparison fields. Each selected field is "
-            "checked against all three API source summaries automatically."
+            "This list is generated dynamically from the current ReportData "
+            "ValueDescriptions and all columns stored by ReportPivots and ShipPivots."
         ),
     )
-    if not selected_metrics:
+    if not selected_fields:
         st.info("Select at least one field to display the comparison.")
         return
+    if len(selected_fields) > 25:
+        st.warning(
+            "For a clear and memory-safe comparison, select up to 25 fields at a time."
+        )
+        selected_fields = selected_fields[:25]
 
-    month_values = sorted(
-        comparison_df["Month"].dropna().astype(str).unique().tolist(),
-        reverse=True,
+    selected_entries = [catalog_by_label[field] for field in selected_fields]
+    month_values = month_keys_for_range(
+        selected_start,
+        selected_end + timedelta(days=1),
     )
-    vessel_month_pairs = (
-        comparison_df[["Month", "ShipName"]]
-        .dropna(subset=["Month", "ShipName"])
-        .drop_duplicates()
-    )
-    expected_pairs = max(len(vessel_month_pairs), 1)
+    expected_pairs = max(len(month_values) * max(len(selected_vessels), 1), 1)
 
     render_metric_cards(
         [
-            ("Selected Fields", f"{len(selected_metrics):,}", "checked_columns"),
-            ("Vessels", f"{comparison_df['ShipName'].nunique():,}", "table_eye"),
-            ("Months", f"{len(month_values):,}", "numeric"),
+            ("Available Fields", f"{len(field_options):,}", "columns_plus"),
+            ("Selected Fields", f"{len(selected_fields):,}", "checked_columns"),
+            ("Vessels", f"{len(selected_vessels):,}", "table_eye"),
             ("API Sources", "3", "database_rows"),
         ]
     )
 
+    source_results: dict[str, pd.DataFrame] = {}
+    selected_ship_labels = {
+        normalize_text(vessel): vessel for vessel in selected_vessels
+    }
+    with st.spinner("Checking selected fields across the three API sources..."):
+        for source_key in source_order_keys:
+            context = contexts.get(source_key)
+            if context is None:
+                source_results[source_key] = pd.DataFrame()
+                continue
+            specs: list[tuple[str, str, tuple[str, ...]]] = []
+            for entry in selected_entries:
+                mappings = tuple(
+                    str(value)
+                    for value in entry.get("mappings", {}).get(source_key, [])
+                )
+                if mappings:
+                    specs.append(
+                        (
+                            str(entry["label"]),
+                            str(entry["aggregation"]),
+                            mappings,
+                        )
+                    )
+            result = cached_dynamic_source_aggregates(
+                source_key,
+                str(context["generation"]),
+                tuple(context["files"]),
+                tuple(context["resolved_vessels"]),
+                selected_start,
+                selected_end,
+                tuple(specs),
+            )
+            if not result.empty:
+                result["ShipName"] = result["ShipName"].map(
+                    lambda value: selected_ship_labels.get(
+                        normalize_text(value), str(value)
+                    )
+                )
+            source_results[source_key] = result
+
     availability_rows: list[dict[str, Any]] = []
     mapping_rows: list[dict[str, Any]] = []
-    detail_frames: list[pd.DataFrame] = []
+    numeric_fields: list[str] = []
 
-    for metric in selected_metrics:
-        metric_values = pd.to_numeric(comparison_df[metric], errors="coerce")
-        metric_source_df = comparison_df[
-            [column for column in ["Month", "ShipName", "Source", metric] if column in comparison_df.columns]
-        ].copy()
-        metric_source_df[metric] = metric_values
+    for entry in selected_entries:
+        field_label = str(entry["label"])
+        aggregation = str(entry["aggregation"])
+        availability_row: dict[str, Any] = {
+            "Field": field_label,
+            "Monthly rule": _aggregation_label(aggregation),
+        }
+        mapping_row: dict[str, Any] = {
+            "Field": field_label,
+            "Monthly rule": _aggregation_label(aggregation),
+        }
+        sources_present = 0
+        field_has_numeric = False
 
-        availability_row: dict[str, Any] = {"Field": metric}
-        mapping_row: dict[str, Any] = {"Field": metric}
-        sources_with_data = 0
-
-        for source in source_order:
-            source_mask = metric_source_df["Source"].astype("string").eq(source)
-            source_values = pd.to_numeric(
-                metric_source_df.loc[source_mask, metric],
-                errors="coerce",
-            )
-            source_pairs = (
-                metric_source_df.loc[
-                    source_mask & source_values.notna(),
+        for source_key, source_label in zip(source_order_keys, source_order):
+            mappings = [
+                str(value)
+                for value in entry.get("mappings", {}).get(source_key, [])
+            ]
+            mapping_text = " + ".join(mappings) if mappings else "-"
+            mapping_row[source_label] = mapping_text
+            result = source_results.get(source_key, pd.DataFrame())
+            if result.empty or not mappings:
+                availability_row[source_label] = (
+                    f"{mapping_text} — No data"
+                    if mappings
+                    else "Not mapped"
+                )
+                continue
+            field_rows = result[result["Field"].eq(field_label)].copy()
+            numeric_pairs = int(
+                field_rows.loc[
+                    pd.to_numeric(field_rows["Value"], errors="coerce").notna(),
                     ["Month", "ShipName"],
-                ]
-                .drop_duplicates()
+                ].drop_duplicates().shape[0]
             )
-            available_count = int(len(source_pairs))
-            if available_count > 0:
-                sources_with_data += 1
-                availability_row[source] = (
-                    f"Available ({available_count:,}/{expected_pairs:,})"
-                )
+            present_pairs = int(
+                field_rows.loc[
+                    pd.to_numeric(
+                        field_rows["PresentValues"], errors="coerce"
+                    ).fillna(0).gt(0),
+                    ["Month", "ShipName"],
+                ].drop_duplicates().shape[0]
+            )
+            if numeric_pairs > 0:
+                sources_present += 1
+                field_has_numeric = True
+                status = f"Numeric {numeric_pairs:,}/{expected_pairs:,}"
+            elif present_pairs > 0:
+                sources_present += 1
+                status = f"Present {present_pairs:,}/{expected_pairs:,} (non-numeric)"
             else:
-                availability_row[source] = "No data"
+                status = "No data"
+            availability_row[source_label] = f"{mapping_text} — {status}"
 
-            mapping_column = f"Mapping: {metric}"
-            mapping_value = "-"
-            if mapping_column in comparison_df.columns:
-                mapped_values = (
-                    comparison_df.loc[
-                        comparison_df["Source"].astype("string").eq(source),
-                        mapping_column,
-                    ]
-                    .dropna()
-                    .astype(str)
-                    .str.strip()
-                )
-                mapped_values = mapped_values[mapped_values.ne("")].drop_duplicates()
-                if not mapped_values.empty:
-                    mapping_value = " | ".join(mapped_values.tolist())
-            mapping_row[source] = mapping_value
-
-        if sources_with_data == 3:
-            availability_status = "All 3 sources"
-        elif sources_with_data == 2:
-            availability_status = "2 of 3 sources"
-        elif sources_with_data == 1:
-            availability_status = "1 of 3 sources"
-        else:
-            availability_status = "No source data"
-
-        availability_row["Availability"] = availability_status
+        availability_row["Availability"] = (
+            "All 3 sources"
+            if sources_present == 3
+            else f"{sources_present} of 3 sources"
+            if sources_present
+            else "No source data"
+        )
         availability_rows.append(availability_row)
         mapping_rows.append(mapping_row)
-
-        pivoted = metric_source_df.pivot_table(
-            index=["Month", "ShipName"],
-            columns="Source",
-            values=metric,
-            aggfunc="first",
-        ).reset_index()
-        pivoted.columns.name = None
-        for source in source_order:
-            if source not in pivoted.columns:
-                pivoted[source] = pd.NA
-        pivoted.insert(2, "Field", metric)
-
-        numeric_sources = pivoted[source_order].apply(
-            pd.to_numeric,
-            errors="coerce",
-        )
-        source_counts = numeric_sources.notna().sum(axis=1)
-        pivoted["Data availability"] = source_counts.map(
-            {
-                3: "All 3 sources",
-                2: "2 of 3 sources",
-                1: "1 of 3 sources",
-                0: "No source data",
-            }
-        )
-        pivoted = pivoted[source_counts.gt(0)].copy()
-        detail_frames.append(
-            pivoted[
-                [
-                    "Month",
-                    "ShipName",
-                    "Field",
-                    *source_order,
-                    "Data availability",
-                ]
-            ]
-        )
+        if field_has_numeric:
+            numeric_fields.append(field_label)
 
     availability_df = pd.DataFrame(availability_rows)[
-        ["Field", *source_order, "Availability"]
+        ["Field", "Monthly rule", *source_order, "Availability"]
     ]
     mapping_df = pd.DataFrame(mapping_rows)[
-        ["Field", *source_order]
+        ["Field", "Monthly rule", *source_order]
     ]
-    detail_df = (
-        pd.concat(detail_frames, ignore_index=True, sort=False)
-        if detail_frames
-        else pd.DataFrame(
-            columns=[
+
+    detail_rows: list[dict[str, Any]] = []
+    value_lookup: dict[tuple[str, str, str, str], Any] = {}
+    for source_key, source_label in zip(source_order_keys, source_order):
+        result = source_results.get(source_key, pd.DataFrame())
+        if result.empty:
+            continue
+        for row in result.itertuples(index=False):
+            value_lookup[
+                (str(row.Month), str(row.ShipName), str(row.Field), source_label)
+            ] = row.Value
+
+    for month_value in month_values:
+        for vessel in selected_vessels:
+            for field_label in numeric_fields:
+                row = {
+                    "Month": month_value,
+                    "ShipName": vessel,
+                    "Field": field_label,
+                    "Monthly rule": _aggregation_label(
+                        str(catalog_by_label[field_label]["aggregation"])
+                    ),
+                }
+                available_count = 0
+                for source_label in source_order:
+                    value = value_lookup.get(
+                        (month_value, vessel, field_label, source_label),
+                        pd.NA,
+                    )
+                    row[source_label] = value
+                    if pd.notna(value):
+                        available_count += 1
+                row["Data availability"] = {
+                    3: "All 3 sources",
+                    2: "2 of 3 sources",
+                    1: "1 of 3 sources",
+                    0: "No source data",
+                }[available_count]
+                detail_rows.append(row)
+
+    detail_df = pd.DataFrame(detail_rows)
+    if not detail_df.empty:
+        detail_df = detail_df[
+            [
                 "Month",
                 "ShipName",
                 "Field",
+                "Monthly rule",
                 *source_order,
                 "Data availability",
             ]
-        )
-    )
-    if not detail_df.empty:
-        detail_df = detail_df.sort_values(
+        ].sort_values(
             ["Month", "ShipName", "Field"],
             ascending=[False, True, True],
-        ).reset_index(drop=True)
-
-    st.markdown(
-        '<div class="section-title">Data availability by field</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "Available (x/y) shows how many vessel-month combinations contain a "
-        "numeric value in each API source for the selected period."
-    )
-    st.dataframe(
-        availability_df,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    st.markdown(
-        '<div class="section-title">Monthly values side by side</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "Each row is one vessel, one month, and one selected field. A blank cell "
-        "means that source has no numeric value for that field and vessel-month."
-    )
-    st.dataframe(
-        format_display_dataframe(detail_df),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    with st.expander("Field mapping used by each API source", expanded=False):
-        st.caption(
-            "This shows the original source field or component mapping used to "
-            "produce each standardized comparison field."
         )
-        st.dataframe(mapping_df, use_container_width=True, hide_index=True)
+
+    st.markdown(
+        '<div class="section-title">Field availability and source mapping</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Each API column shows the original source field followed by its data "
+        "availability. Numeric x/y counts vessel-month combinations with a "
+        "monthly value; Present identifies non-numeric fields."
+    )
+    st.dataframe(availability_df, use_container_width=True, hide_index=True)
+
+    st.markdown(
+        '<div class="section-title">Monthly numeric values side by side</div>',
+        unsafe_allow_html=True,
+    )
+    if detail_df.empty:
+        st.info(
+            "The selected fields exist only as text/status data, so availability "
+            "is shown above but no numeric monthly comparison is produced."
+        )
+    else:
+        st.caption(
+            "Only fields containing numeric values are shown here. The Monthly "
+            "rule column explains whether AtlasFlow used Average, Sum, or Latest value."
+        )
+        st.dataframe(
+            format_display_dataframe(detail_df),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     with st.expander("Source freshness and storage", expanded=False):
         freshness_rows = []
-        for source_key, source_meta in source_metadata.items():
+        for source_key in source_order_keys:
+            source_meta = source_metadata.get(source_key, {})
             freshness_rows.append(
                 {
                     "Source": COMPARISON_SOURCE_LABELS[source_key],
@@ -7213,12 +7822,11 @@ def render_monthly_comparison_workspace(
                     "Refresh mode": source_meta.get("refresh_mode", "-"),
                 }
             )
-        if freshness_rows:
-            st.dataframe(
-                pd.DataFrame(freshness_rows),
-                use_container_width=True,
-                hide_index=True,
-            )
+        st.dataframe(
+            pd.DataFrame(freshness_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     export_signature = sha256(
         "|".join(
@@ -7226,7 +7834,7 @@ def render_monthly_comparison_workspace(
                 selected_start.isoformat(),
                 selected_end.isoformat(),
                 ",".join(selected_vessels),
-                ",".join(selected_metrics),
+                ",".join(selected_fields),
                 str(len(availability_df)),
                 str(len(detail_df)),
             ]
@@ -7238,11 +7846,11 @@ def render_monthly_comparison_workspace(
     if st.button(
         "Prepare monthly comparison Excel",
         type="primary",
-        disabled=detail_df.empty,
+        disabled=availability_df.empty,
     ):
         with st.spinner("Preparing monthly comparison workbook..."):
             st.session_state["atlas_monthly_export_bytes"] = (
-                to_simplified_monthly_comparison_excel_bytes(
+                to_dynamic_monthly_comparison_excel_bytes(
                     availability_df,
                     detail_df,
                     mapping_df,
@@ -7257,18 +7865,14 @@ def render_monthly_comparison_workspace(
         st.download_button(
             "Download monthly comparison Excel",
             data=st.session_state["atlas_monthly_export_bytes"],
-            file_name="atlasflow_monthly_comparison.xlsx",
-            mime=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
+            file_name="atlasflow_dynamic_monthly_comparison.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-
-
-# =============================================================================
-# Warmup
-# =============================================================================
-
+    else:
+        st.caption(
+            "The workbook is prepared on demand and includes availability, "
+            "monthly numeric values, and exact source-field mappings."
+        )
 
 def run_warmup_if_requested() -> None:
     """Build or incrementally refresh one or all prepared AtlasFlow snapshots."""
