@@ -6196,6 +6196,73 @@ def _partition_entries_for_period(
     ]
 
 
+def _resolve_partition_vessel_names(
+    dataset: ds.Dataset,
+    entries: list[dict[str, Any]],
+    selected_vessels: list[str] | None,
+) -> list[str] | None:
+    """Map UI vessel labels to the exact ShipName strings stored in Parquet.
+
+    The UI fleet list is upper-case, while ShipPivots/ReportPivots may store the
+    same vessel with mixed case or extra spaces. Arrow predicate pushdown is
+    case-sensitive, so filtering with the UI label directly can return zero
+    rows even though the vessel is present. Monthly summary files are tiny and
+    provide the exact stored labels; a one-column dataset scan is used only as
+    a fallback.
+    """
+    if not selected_vessels or "ShipName" not in dataset.schema.names:
+        return selected_vessels
+
+    selected_keys = {normalize_text(vessel) for vessel in selected_vessels}
+    resolved: dict[str, str] = {}
+
+    # First use the small monthly summaries, avoiding a scan of the large raw
+    # ShipPivots partitions on normal app reruns.
+    for entry in entries:
+        summary_path = partition_entry_path(entry, "summary_file")
+        if not summary_path.is_file():
+            continue
+        try:
+            summary_table = pq.read_table(summary_path, columns=["ShipName"])
+            for value in summary_table.column("ShipName").to_pylist():
+                if value is None:
+                    continue
+                actual_name = str(value)
+                key = normalize_text(actual_name)
+                if key in selected_keys and key not in resolved:
+                    resolved[key] = actual_name
+            del summary_table
+        except Exception:
+            continue
+        if selected_keys.issubset(resolved):
+            break
+
+    # Fallback for old/missing summary files: scan only the ShipName column and
+    # stop as soon as all requested vessels have been resolved.
+    if not selected_keys.issubset(resolved):
+        try:
+            scanner = dataset.scanner(columns=["ShipName"], batch_size=100_000)
+            for batch in scanner.to_batches():
+                for value in batch.column(0).to_pylist():
+                    if value is None:
+                        continue
+                    actual_name = str(value)
+                    key = normalize_text(actual_name)
+                    if key in selected_keys and key not in resolved:
+                        resolved[key] = actual_name
+                if selected_keys.issubset(resolved):
+                    break
+        except Exception:
+            pass
+
+    # Preserve the original labels for unresolved vessels so a genuinely absent
+    # vessel still produces a clean zero-row result rather than loading all data.
+    return [
+        resolved.get(normalize_text(vessel), vessel)
+        for vessel in selected_vessels
+    ]
+
+
 def _dataset_filter_expression(
     source_key: str,
     schema_names: list[str],
@@ -6264,10 +6331,15 @@ def read_partitioned_source_slice(
         return pd.DataFrame(), 0, False
     dataset = ds.dataset(files, format="parquet")
     schema_names = list(dataset.schema.names)
+    resolved_vessels = _resolve_partition_vessel_names(
+        dataset,
+        entries,
+        selected_vessels,
+    )
     expression = _dataset_filter_expression(
         source_key,
         schema_names,
-        selected_vessels,
+        resolved_vessels,
         selected_start,
         selected_end,
     )
