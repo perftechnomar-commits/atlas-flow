@@ -6634,14 +6634,14 @@ def render_wide_source_tab(
     if summary_aggregation not in aggregation_options:
         summary_aggregation = "Average"
 
+    group_key = f"atlas_{source_key}_summary_groups"
+    legacy_value_key = f"atlas_{source_key}_summary_values"
+
     if preview_mode == "Summary Analysis":
         st.markdown(
             '<div class="section-title">Summary Builder</div>',
             unsafe_allow_html=True,
         )
-        summary_value_options = numeric_column_options(clean_df)
-        group_key = f"atlas_{source_key}_summary_groups"
-        value_key = f"atlas_{source_key}_summary_values"
 
         previous_groups = st.session_state.get(group_key, [])
         if not isinstance(previous_groups, list):
@@ -6658,18 +6658,7 @@ def render_wide_source_tab(
         if valid_groups != previous_groups:
             st.session_state[group_key] = valid_groups
 
-        previous_values = st.session_state.get(value_key, [])
-        if not isinstance(previous_values, list):
-            previous_values = []
-        valid_values = [
-            column
-            for column in previous_values
-            if column in summary_value_options
-        ]
-        if valid_values != previous_values:
-            st.session_state[value_key] = valid_values
-
-        builder_cols = st.columns(3)
+        builder_cols = st.columns(2)
         with builder_cols[0]:
             summary_group_fields = st.multiselect(
                 "Group by fields",
@@ -6679,14 +6668,6 @@ def render_wide_source_tab(
                 help="Choose the fields that define each summary row.",
             )
         with builder_cols[1]:
-            summary_value_fields = st.multiselect(
-                "Value fields",
-                options=summary_value_options,
-                default=valid_values,
-                key=value_key,
-                help="Choose one or more numeric source columns to aggregate.",
-            )
-        with builder_cols[2]:
             summary_aggregation = st.selectbox(
                 "Aggregation",
                 options=aggregation_options,
@@ -6694,16 +6675,48 @@ def render_wide_source_tab(
                 key=aggregation_key,
             )
     else:
-        stored_groups = st.session_state.get(
-            f"atlas_{source_key}_summary_groups",
-            [],
-        )
-        stored_values = st.session_state.get(
-            f"atlas_{source_key}_summary_values",
-            [],
-        )
+        stored_groups = st.session_state.get(group_key, [])
         summary_group_fields = stored_groups if isinstance(stored_groups, list) else []
-        summary_value_fields = stored_values if isinstance(stored_values, list) else []
+
+    # Summary metrics now follow the Clean Dataset selection automatically. The
+    # user selects source columns once above, then chooses only grouping fields
+    # and the aggregation method here. Exclude grouping and obvious identifier
+    # columns so IDs are not accidentally averaged or summed.
+    non_metric_keys = {
+        "reportid",
+        "shipid",
+        "vesselid",
+        "voyageid",
+        "imo",
+        "imonumber",
+        "mmsi",
+    }
+    summary_value_fields = [
+        column
+        for column in numeric_column_options(clean_df)
+        if column not in summary_group_fields
+        and normalize_text(column) not in non_metric_keys
+    ]
+
+    # Remove the obsolete widget state left by earlier AtlasFlow versions. It is
+    # no longer used because value fields are inherited from Clean Dataset.
+    st.session_state.pop(legacy_value_key, None)
+
+    if preview_mode == "Summary Analysis":
+        if summary_value_fields:
+            metric_preview = ", ".join(summary_value_fields[:8])
+            if len(summary_value_fields) > 8:
+                metric_preview += f", +{len(summary_value_fields) - 8} more"
+            st.caption(
+                f"{len(summary_value_fields):,} numeric field(s) inherited automatically "
+                f"from Clean Dataset: {metric_preview}. Change the columns above to "
+                "change the summary metrics."
+            )
+        else:
+            st.info(
+                "No numeric metric columns are available after excluding the selected "
+                "Group by fields. Add a numeric column to Clean Dataset or change the grouping."
+            )
 
     export_sheet_name = "Clean Dataset"
     if preview_mode == "Summary Analysis":
@@ -6717,7 +6730,7 @@ def render_wide_source_tab(
         else:
             displayed_table_df = pd.DataFrame()
             st.info(
-                "Select at least one Group by field and one Value field to preview Summary Analysis."
+                "Select at least one Group by field and include at least one numeric metric in Clean Dataset to preview Summary Analysis."
             )
         export_sheet_name = "Summary Analysis"
     elif preview_mode == "Source Data":
