@@ -8283,6 +8283,78 @@ def cargo_excel_bytes(
     return output.getvalue()
 
 
+def _cargo_subset_vessel(df: pd.DataFrame, vessel: str) -> pd.DataFrame:
+    if df.empty or "ShipName" not in df.columns:
+        return df.copy()
+    return df.loc[match_selected_vessels(df["ShipName"], [vessel])].copy()
+
+
+def build_cargo_voyage_overview(
+    ship_df: pd.DataFrame,
+    rp_df: pd.DataFrame,
+    long_df: pd.DataFrame,
+    selected_vessels: list[str],
+) -> pd.DataFrame:
+    """Build one compact row per vessel/voyage for mass review."""
+    rows: list[dict[str, Any]] = []
+    for vessel in selected_vessels:
+        vessel_ship = _cargo_subset_vessel(ship_df, vessel)
+        vessel_rp = _cargo_subset_vessel(rp_df, vessel)
+        catalog = build_voyage_catalog(vessel_ship)
+        if catalog.empty:
+            continue
+        for _, voyage in catalog.iterrows():
+            voyage_id = str(voyage.get("VoyageId", ""))
+            voyage_start = pd.to_datetime(voyage.get("VoyageStart"), errors="coerce", utc=True)
+            voyage_end = pd.to_datetime(voyage.get("VoyageEnd"), errors="coerce", utc=True)
+            if pd.isna(voyage_start) or pd.isna(voyage_end):
+                continue
+            rp_voyage = filter_reportpivots_for_voyage(vessel_rp, voyage_start, voyage_end)
+            cargo_long = cargo_reportdata_for_voyage(long_df, vessel, voyage_start, voyage_end)
+            cargo_by_report = pivot_cargo_reports(cargo_long)
+
+            cargo_weight_col = cargo_first_column(rp_voyage, ["CargoWeight", "Cargo Weight", "CargoMT"])
+            cargo_teu_col = cargo_first_column(rp_voyage, ["CargoTEU", "Cargo TEU", "TEU"])
+            dep_col = cargo_first_column(rp_voyage, ["DeparturePort", "Departure Port", "PortFrom"])
+            arr_col = cargo_first_column(rp_voyage, ["ArrivalPort", "Arrival Port", "PortTo"])
+            cargo_weight = cargo_latest_value(rp_voyage, cargo_weight_col)
+            if pd.isna(pd.to_numeric(pd.Series([cargo_weight]), errors="coerce").iloc[0]) and "Cargo Weight [tons]" in cargo_by_report.columns:
+                cargo_weight = cargo_latest_value(cargo_by_report, "Cargo Weight [tons]")
+
+            def latest_report_value(name: str) -> Any:
+                return cargo_latest_value(cargo_by_report, name) if name in cargo_by_report.columns else pd.NA
+
+            rows.append({
+                "Vessel": vessel,
+                "Voyage": voyage_id,
+                "Voyage Internal": voyage.get("VoyageIdInternal"),
+                "Start": voyage_start,
+                "End": voyage_end,
+                "Duration [days]": max((voyage_end - voyage_start).total_seconds() / 86400.0, 0.0),
+                "Departure": cargo_latest_value(rp_voyage, dep_col),
+                "Arrival": cargo_latest_value(rp_voyage, arr_col),
+                "Cargo [MT]": cargo_weight,
+                "Cargo TEU": cargo_latest_value(rp_voyage, cargo_teu_col),
+                "Full Units": latest_report_value("Total Number Full Units (20 and 40ft)"),
+                "Empty Units": latest_report_value("Total Number Empty Units (20 and 40ft)"),
+                "Reefer Units": latest_report_value("Total Number Reefer Units (20 and 40ft)"),
+                "DG Units": latest_report_value("Total Number DG Units (20 and 40ft)"),
+                "Cargo Reports": int(len(cargo_by_report)),
+                "ShipPivots Points": int(voyage.get("Points", 0) or 0),
+            })
+    if not rows:
+        return pd.DataFrame()
+    result = pd.DataFrame(rows)
+    return result.sort_values(["Start", "Vessel", "Voyage"], ascending=[False, True, True]).reset_index(drop=True)
+
+
+def cargo_overview_excel_bytes(overview: pd.DataFrame) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        write_table_sheet(writer, overview, "Voyage Overview", "CargoVoyageOverview")
+    return output.getvalue()
+
+
 def render_cargo_voyages_workspace(
     username: str,
     password: str,
@@ -8297,22 +8369,20 @@ def render_cargo_voyages_workspace(
 ) -> None:
     st.markdown('<div class="section-title">Cargo & Voyages</div>', unsafe_allow_html=True)
     st.caption(
-        "Voyage and report-level cargo view using ShipPivots.VoyageId, ReportPivots cargo/port fields, "
-        "and cargo/container values from ReportData. Normal users read the existing AtlasFlow snapshots."
+        "Compact voyage overview for the selected vessels and period. Open Voyage Detail only when a specific voyage needs investigation."
     )
-
     if not selected_vessels:
         st.info("Select at least one vessel in the sidebar.")
         return
-    vessel = st.selectbox("Vessel", options=selected_vessels, key="atlas_cargo_vessel")
 
+    # Load the prepared wide sources once for the complete sidebar selection.
     ship_df, ship_meta = load_wide_source_for_view(
         "shippivots", username, password, token, auth_method, api_start_date, False,
-        [vessel], selected_start, selected_end,
+        selected_vessels, selected_start, selected_end,
     )
     rp_df, rp_meta = load_wide_source_for_view(
         "reportpivots", username, password, token, auth_method, api_start_date, False,
-        [vessel], selected_start, selected_end,
+        selected_vessels, selected_start, selected_end,
     )
     if ship_meta.get("needs_warmup") or rp_meta.get("needs_warmup"):
         missing = []
@@ -8323,41 +8393,91 @@ def render_cargo_voyages_workspace(
         st.info("Cargo & Voyages needs prepared snapshots for: " + ", ".join(missing) + ". Run the AtlasFlow warmup first.")
         return
 
-    voyage_catalog = build_voyage_catalog(ship_df)
-    if voyage_catalog.empty:
-        st.info("No VoyageId values were found for this vessel in the selected period.")
-        return
-
-    voyage_options = voyage_catalog.index.tolist()
-    selected_idx = st.selectbox(
-        "Voyage",
-        options=voyage_options,
-        format_func=lambda idx: cargo_voyage_label(voyage_catalog.loc[idx]),
-        key="atlas_cargo_voyage_idx",
+    overview = build_cargo_voyage_overview(ship_df, rp_df, long_df, selected_vessels)
+    mode_options = ["Voyage Overview", "Voyage Detail"]
+    mode = render_text_tab_bar(
+        mode_options,
+        st.session_state.get("atlas_cargo_mode", "Voyage Overview"),
+        param_name="cargo_mode",
+        css_class="cargo-mode",
     )
-    voyage = voyage_catalog.loc[selected_idx]
-    voyage_id = str(voyage["VoyageId"])
-    voyage_start = pd.to_datetime(voyage["VoyageStart"], errors="coerce", utc=True)
-    voyage_end = pd.to_datetime(voyage["VoyageEnd"], errors="coerce", utc=True)
-    if pd.isna(voyage_start) or pd.isna(voyage_end):
-        st.warning("The selected voyage does not have a usable time interval.")
+    st.session_state["atlas_cargo_mode"] = mode
+
+    if overview.empty:
+        st.info("No VoyageId values were found for the selected vessels in the selected period.")
         return
 
-    ship_work = ship_df.copy()
+    if mode == "Voyage Overview":
+        # Deliberately compact: summary line + mass-data table first.
+        vessel_count = int(overview["Vessel"].nunique())
+        report_count = int(pd.to_numeric(overview["Cargo Reports"], errors="coerce").fillna(0).sum())
+        st.markdown(
+            f'<div class="atlas-pill"><span>Voyages:</span> {len(overview):,} &nbsp; | &nbsp; '
+            f'<span>Vessels:</span> {vessel_count:,} &nbsp; | &nbsp; '
+            f'<span>Cargo reports:</span> {report_count:,} &nbsp; | &nbsp; '
+            f'<span>Period:</span> {selected_start.strftime("%d/%m/%Y")} → {selected_end.strftime("%d/%m/%Y")}</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("One row per voyage. Use the existing sidebar Fleet group / Vessel / Period controls to scale from one vessel to the whole selected fleet.")
+        render_preview_table(overview)
+
+        overview_signature = sha256(
+            f"{tuple(selected_vessels)}|{selected_start}|{selected_end}|{len(overview)}|{overview['Start'].max()}".encode("utf-8")
+        ).hexdigest()
+        overview_ready = (
+            st.session_state.get("atlas_cargo_overview_export_signature") == overview_signature
+            and "atlas_cargo_overview_export_bytes" in st.session_state
+        )
+        if st.button("Prepare overview Excel", key="atlas_prepare_cargo_overview_excel"):
+            st.session_state["atlas_cargo_overview_export_bytes"] = cargo_overview_excel_bytes(overview)
+            st.session_state["atlas_cargo_overview_export_signature"] = overview_signature
+            overview_ready = True
+        if overview_ready:
+            st.download_button(
+                "Download voyage overview Excel",
+                data=st.session_state["atlas_cargo_overview_export_bytes"],
+                file_name="atlasflow_cargo_voyage_overview.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="atlas_download_cargo_overview_excel",
+            )
+        with st.expander("Source freshness", expanded=False):
+            st.caption(
+                f"ReportData: {reportdata_metadata.get('loaded_at_local', reportdata_metadata.get('loaded_at_utc', '-'))} | "
+                f"ReportPivots: {rp_meta.get('loaded_at_local', '-')} | ShipPivots: {ship_meta.get('loaded_at_local', '-')}"
+            )
+        return
+
+    # Voyage Detail is intentionally opt-in. The user first chooses a vessel,
+    # then one voyage from the same mass-data overview universe.
+    detail_vessels = sorted(overview["Vessel"].dropna().astype(str).unique().tolist(), key=str.casefold)
+    vessel = st.selectbox("Vessel", options=detail_vessels, key="atlas_cargo_detail_vessel")
+    vessel_overview = overview[overview["Vessel"].astype(str).eq(vessel)].copy().reset_index(drop=True)
+    detail_idx = st.selectbox(
+        "Voyage",
+        options=vessel_overview.index.tolist(),
+        format_func=lambda idx: (
+            f"{vessel_overview.loc[idx, 'Voyage']} | "
+            f"{pd.to_datetime(vessel_overview.loc[idx, 'Start'], errors='coerce', utc=True).strftime('%d/%m/%Y %H:%M')} → "
+            f"{pd.to_datetime(vessel_overview.loc[idx, 'End'], errors='coerce', utc=True).strftime('%d/%m/%Y %H:%M')}"
+        ),
+        key="atlas_cargo_detail_voyage_idx",
+    )
+    voyage = vessel_overview.loc[detail_idx]
+    voyage_id = str(voyage["Voyage"])
+    voyage_start = pd.to_datetime(voyage["Start"], errors="coerce", utc=True)
+    voyage_end = pd.to_datetime(voyage["End"], errors="coerce", utc=True)
+
+    vessel_ship = _cargo_subset_vessel(ship_df, vessel)
+    vessel_rp = _cargo_subset_vessel(rp_df, vessel)
+    ship_work = vessel_ship.copy()
     ship_work["DateTime"] = pd.to_datetime(ship_work["DateTime"], errors="coerce", utc=True)
     ship_voyage = ship_work[
         ship_work.get("VoyageId", pd.Series(index=ship_work.index, dtype="string")).astype("string").eq(voyage_id)
     ].copy().sort_values("DateTime")
-    rp_voyage = filter_reportpivots_for_voyage(rp_df, voyage_start, voyage_end)
+    rp_voyage = filter_reportpivots_for_voyage(vessel_rp, voyage_start, voyage_end)
     cargo_long = cargo_reportdata_for_voyage(long_df, vessel, voyage_start, voyage_end)
     cargo_by_report = pivot_cargo_reports(cargo_long)
     timeline = cargo_report_timeline(cargo_by_report, rp_voyage)
-
-    render_api_load_caption(reportdata_metadata)
-    st.caption(
-        f"ReportPivots load: {rp_meta.get('loaded_at_local', '-')} | "
-        f"ShipPivots load: {ship_meta.get('loaded_at_local', '-')}"
-    )
 
     cargo_weight_col = cargo_first_column(rp_voyage, ["CargoWeight", "Cargo Weight", "CargoMT"])
     cargo_teu_col = cargo_first_column(rp_voyage, ["CargoTEU", "Cargo TEU", "TEU"])
@@ -8365,7 +8485,6 @@ def render_cargo_voyages_workspace(
     arr_col = cargo_first_column(rp_voyage, ["ArrivalPort", "Arrival Port", "PortTo"])
     draft_f_col = cargo_first_column(rp_voyage, ["DraftFore", "Draft Forward"])
     draft_a_col = cargo_first_column(rp_voyage, ["DraftAft", "Draft Aft"])
-
     cargo_weight = cargo_latest_value(rp_voyage, cargo_weight_col)
     if pd.isna(pd.to_numeric(pd.Series([cargo_weight]), errors="coerce").iloc[0]) and "Cargo Weight [tons]" in cargo_by_report.columns:
         cargo_weight = cargo_latest_value(cargo_by_report, "Cargo Weight [tons]")
@@ -8398,15 +8517,11 @@ def render_cargo_voyages_workspace(
     if status_columns:
         render_preview_table(cargo_by_report[status_columns])
     else:
-        st.info(
-            "No cargo ReportData rows are available in the current prepared snapshot for this voyage. "
-            "Because cargo fields were newly added to AtlasFlow, run a ReportData warmup after deploying this batch."
-        )
+        st.info("No cargo ReportData rows are available for this voyage in the prepared snapshot.")
 
     st.markdown('<div class="section-title">Report / port timeline</div>', unsafe_allow_html=True)
-    timeline_display = timeline.copy()
-    if not timeline_display.empty:
-        render_preview_table(timeline_display)
+    if not timeline.empty:
+        render_preview_table(timeline)
     else:
         st.info("No report timeline rows were found for the selected voyage.")
 
@@ -8426,10 +8541,9 @@ def render_cargo_voyages_workspace(
     if not cargo_by_report.empty:
         st.markdown('<div class="section-title">Selected report details</div>', unsafe_allow_html=True)
         report_rows = cargo_by_report.reset_index(drop=True)
-        report_options = report_rows.index.tolist()
         report_idx = st.selectbox(
             "Report",
-            options=report_options,
+            options=report_rows.index.tolist(),
             format_func=lambda idx: (
                 f"{pd.to_datetime(report_rows.loc[idx, 'StartDateTimeGMT'], errors='coerce', utc=True).strftime('%d/%m/%Y %H:%M') if pd.notna(pd.to_datetime(report_rows.loc[idx, 'StartDateTimeGMT'], errors='coerce', utc=True)) else '-'}"
                 f" | {report_rows.loc[idx, 'ReportType']} | Report {report_rows.loc[idx, 'ReportId']}"
@@ -8453,53 +8567,34 @@ def render_cargo_voyages_workspace(
         }
         fields = [column for column in [*CARGO_REPORT_IDENTITY_COLUMNS, *fields_map[detail_tab]] if column in selected_report.columns]
         detail_df = selected_report[fields].copy()
-        # Transpose value fields for easier single-report reading while retaining identity above.
         identity = [column for column in CARGO_REPORT_IDENTITY_COLUMNS if column in detail_df.columns]
         value_fields = [column for column in detail_df.columns if column not in identity]
         if value_fields:
-            key_values = pd.DataFrame({
-                "Field": value_fields,
-                "Value": [detail_df.iloc[0][column] for column in value_fields],
-            })
+            key_values = pd.DataFrame({"Field": value_fields, "Value": [detail_df.iloc[0][column] for column in value_fields]})
             key_values = key_values[key_values["Value"].notna()].copy()
             render_preview_table(key_values)
         else:
             st.info("No values are available in this category for the selected report.")
 
-    overview = pd.DataFrame([{
-        "ShipName": vessel,
-        "VoyageId": voyage_id,
-        "VoyageIdInternal": voyage.get("VoyageIdInternal"),
-        "VoyageStart": voyage_start,
-        "VoyageEnd": voyage_end,
-        "DurationDays": duration_days,
-        "DeparturePort": departure_port,
-        "ArrivalPort": arrival_port,
-        "CargoWeightMT": cargo_weight,
-        "CargoTEU": cargo_teu,
-        "DraftFore": cargo_latest_value(rp_voyage, draft_f_col),
-        "DraftAft": cargo_latest_value(rp_voyage, draft_a_col),
+    detail_overview = pd.DataFrame([{
+        "ShipName": vessel, "VoyageId": voyage_id, "VoyageStart": voyage_start, "VoyageEnd": voyage_end,
+        "DurationDays": duration_days, "DeparturePort": departure_port, "ArrivalPort": arrival_port,
+        "CargoWeightMT": cargo_weight, "CargoTEU": cargo_teu,
+        "DraftFore": cargo_latest_value(rp_voyage, draft_f_col), "DraftAft": cargo_latest_value(rp_voyage, draft_a_col),
         "CargoReports": len(cargo_by_report),
     }])
     export_signature = sha256(f"{vessel}|{voyage_id}|{voyage_start}|{voyage_end}|{len(cargo_by_report)}|{len(rp_voyage)}".encode("utf-8")).hexdigest()
-    cargo_export_ready = (
-        st.session_state.get("atlas_cargo_export_signature") == export_signature
-        and "atlas_cargo_export_bytes" in st.session_state
-    )
+    cargo_export_ready = st.session_state.get("atlas_cargo_export_signature") == export_signature and "atlas_cargo_export_bytes" in st.session_state
     if st.button("Prepare voyage Excel", type="primary", key="atlas_prepare_cargo_excel"):
         with st.spinner("Preparing voyage workbook..."):
-            st.session_state["atlas_cargo_export_bytes"] = cargo_excel_bytes(
-                overview, timeline, cargo_by_report, rp_voyage, ship_voyage
-            )
+            st.session_state["atlas_cargo_export_bytes"] = cargo_excel_bytes(detail_overview, timeline, cargo_by_report, rp_voyage, ship_voyage)
             st.session_state["atlas_cargo_export_signature"] = export_signature
         cargo_export_ready = True
     if cargo_export_ready:
         st.download_button(
-            "Download voyage Excel",
-            data=st.session_state["atlas_cargo_export_bytes"],
+            "Download voyage Excel", data=st.session_state["atlas_cargo_export_bytes"],
             file_name=f"atlasflow_cargo_{normalize_text(vessel)}_{normalize_text(voyage_id)}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="atlas_download_cargo_excel",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="atlas_download_cargo_excel",
         )
 
 # =============================================================================
