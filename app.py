@@ -224,8 +224,78 @@ PERFORMANCE_KPI_VALUE_ALIASES = {
     "DG4 Running Hours [hh:mm]": ["DG4 Running Hours [hh:mm]"],
 }
 
+# Cargo / voyage values discovered in the live Marorka V1 ReportData scan.
+# Keep these in a dedicated controlled group so AtlasFlow can support the
+# Cargo & Voyages workspace without broad-loading every ReportData variable.
+CARGO_VALUE_ALIASES = {
+    "Cargo Weight [tons]": ["Cargo Weight [tons]"],
+    "Cargo Weight Added [MT]": ["Cargo Weight Added [MT]", "Cargo Weight Added [tons]"],
+    "Cargo Weight Removed [MT]": ["Cargo Weight Removed [MT]", "Cargo Weight Removed [tons]"],
+    "20ft Full Units": ["20ft Full Units"],
+    "20ft Full Units Weight [tons]": ["20ft Full Units Weight [tons]"],
+    "20ft Empty Units": ["20ft Empty Units"],
+    "20ft Empty Units Weight [tons]": ["20ft Empty Units Weight [tons]"],
+    "40ft Full Units": ["40ft Full Units"],
+    "40ft Full Units Weight [tons]": ["40ft Full Units Weight [tons]"],
+    "40ft Empty Units": ["40ft Empty Units"],
+    "40ft Empty Units Weight [tons]": ["40ft Empty Units Weight [tons]"],
+    "20ft Reefer Units": ["20ft Reefer Units"],
+    "40ft Reefer Units": ["40ft Reefer Units"],
+    "20ft DG Units": ["20ft DG Units"],
+    "40ft DG Units": ["40ft DG Units"],
+    "TEU Loaded Units": ["TEU Loaded Units"],
+    "TEU Loaded Weight [tons]": ["TEU Loaded Weight [tons]"],
+    "TEU Discharged Units": ["TEU Discharged Units"],
+    "TEU Discharged Weight [tons]": ["TEU Discharged Weight [tons]"],
+    "FEU Loaded Units": ["FEU Loaded Units"],
+    "FEU Loaded Weight [tons]": ["FEU Loaded Weight [tons]"],
+    "FEU Discharged Units": ["FEU Discharged Units"],
+    "FEU Discharged Weight [tons]": ["FEU Discharged Weight [tons]"],
+    "Reefers Loaded Units": ["Reefers Loaded Units"],
+    "Reefers Loaded Weight [tons]": ["Reefers Loaded Weight [tons]"],
+    "Reefers Discharged Units": ["Reefers Discharged Units"],
+    "Reefers Discharged Weight [tons]": ["Reefers Discharged Weight [tons]"],
+    "Reefer Units Weight [tons]": ["Reefer Units Weight [tons]"],
+    "DG Units Weight [tons]": ["DG Units Weight [tons]"],
+    "Total Number Full Units (20 and 40ft)": ["Total Number Full Units (20 and 40ft)"],
+    "Total Number Empty Units (20 and 40ft)": ["Total Number Empty Units (20 and 40ft)"],
+    "Total Number Reefer Units (20 and 40ft)": ["Total Number Reefer Units (20 and 40ft)"],
+    "Total Number DG Units (20 and 40ft)": ["Total Number DG Units (20 and 40ft)"],
+    "Total Number of 20ft Units (Full and Empty)": ["Total Number of 20ft Units (Full and Empty)"],
+    "Total Number of 40ft Units (Full and Empty)": ["Total Number of 40ft Units (Full and Empty)"],
+    "Total Full Units Weight (20 and 40ft) [tons]": ["Total Full Units Weight (20 and 40ft) [tons]"],
+    "Total Empty Units Weight (20 and 40ft) [tons]": ["Total Empty Units Weight (20 and 40ft) [tons]"],
+    "Total 20ft Units Weight (Full and Empty)": ["Total 20ft Units Weight (Full and Empty)"],
+    "Total 40 ft Units Weight (Full and Empty)": ["Total 40 ft Units Weight (Full and Empty)"],
+    "Total Units Weight (All Categories)": ["Total Units Weight (All Categories)"],
+    "Draft Forward [m] (m)": ["Draft Forward [m] (m)", "Draft Forward [m]"],
+    "Draft Aft [m] (m)": ["Draft Aft [m] (m)", "Draft Aft [m]"],
+    "Observed Draft Forward [m]": ["Observed Draft Forward [m]"],
+    "Observed Draft Aft [m]": ["Observed Draft Aft [m]"],
+    "Observed Mean Draft [m]": ["Observed Mean Draft [m]"],
+    "Calculated Draft Forward [m]": ["Calculated Draft Forward [m]"],
+    "Calculated Draft Aft [m]": ["Calculated Draft Aft [m]"],
+    "Calculated Mean Draft [m]": ["Calculated Mean Draft [m]"],
+    "Ballast Amount [tons]": ["Ballast Amount [tons]"],
+    "Dead Load [tons]": ["Dead Load [tons]"],
+    "Air Draft [m]": ["Air Draft [m]"],
+    "Cargo Operations Completed During Port Stay": ["Cargo Operations Completed During Port Stay"],
+    "Commenced Cargo Operation Time [dd:mm:yyyy hh:mm]": ["Commenced Cargo Operation Time [dd:mm:yyyy hh:mm]"],
+    "Completed Cargo Operation Time [dd:mm:yyyy hh:mm]": ["Completed Cargo Operation Time [dd:mm:yyyy hh:mm]"],
+    "Cargo Checked: Bridges": ["Cargo Checked: Bridges"],
+    "Cargo Checked: Lashings": ["Cargo Checked: Lashings"],
+    "Reefer Energy [kWh]": ["Reefer Energy [kWh]"],
+    "Total Reefer Power Draw (kW)": ["Total Reefer Power Draw (kW)"],
+    "Average Power per Reefer [kW]": ["Average Power per Reefer [kW]"],
+}
+
 REPORTDATA_VALUE_WHITELIST = sorted(
-    {alias for aliases in PERFORMANCE_KPI_VALUE_ALIASES.values() for alias in aliases},
+    {
+        alias
+        for alias_group in (PERFORMANCE_KPI_VALUE_ALIASES, CARGO_VALUE_ALIASES)
+        for aliases in alias_group.values()
+        for alias in aliases
+    },
     key=str.casefold,
 )
 REPORTDATA_VALUE_WHITELIST_KEYS = {
@@ -3608,7 +3678,7 @@ def fetch_report_data_to_snapshot(
         "max_pages": MAX_ODATA_PAGES,
         "loaded_start_date": start_date.isoformat(),
         "snapshot_format": "parquet",
-        "reportdata_mode": "atlasflow_consumption_oil_stats_whitelist",
+        "reportdata_mode": "atlasflow_performance_oil_cargo_whitelist",
         "value_description_whitelist_count": len(REPORTDATA_VALUE_WHITELIST),
     }
     signature = request_signature(username, auth_method, start_date)
@@ -7989,6 +8059,449 @@ def run_warmup_if_requested() -> None:
             st.caption(source_refresh_status_summary(source_key))
     st.stop()
 
+
+# =============================================================================
+# Cargo & Voyages workspace
+# =============================================================================
+
+CARGO_REPORT_IDENTITY_COLUMNS = [
+    "ReportId", "ShipName", "ReportType", "StartDateTimeGMT", "EndDateTimeGMT", "StateName"
+]
+
+CARGO_SUMMARY_FIELDS = [
+    "Cargo Weight [tons]",
+    "Total Number Full Units (20 and 40ft)",
+    "Total Number Empty Units (20 and 40ft)",
+    "Total Number Reefer Units (20 and 40ft)",
+    "Total Number DG Units (20 and 40ft)",
+    "Total Units Weight (All Categories)",
+]
+
+CARGO_CONTAINER_FIELDS = [
+    "20ft Full Units", "40ft Full Units", "20ft Empty Units", "40ft Empty Units",
+    "20ft Reefer Units", "40ft Reefer Units", "20ft DG Units", "40ft DG Units",
+    "20ft Full Units Weight [tons]", "40ft Full Units Weight [tons]",
+    "20ft Empty Units Weight [tons]", "40ft Empty Units Weight [tons]",
+    "Reefer Units Weight [tons]", "DG Units Weight [tons]",
+    "Total Number Full Units (20 and 40ft)", "Total Number Empty Units (20 and 40ft)",
+    "Total Number Reefer Units (20 and 40ft)", "Total Number DG Units (20 and 40ft)",
+    "Total Number of 20ft Units (Full and Empty)", "Total Number of 40ft Units (Full and Empty)",
+    "Total Full Units Weight (20 and 40ft) [tons]", "Total Empty Units Weight (20 and 40ft) [tons]",
+    "Total Units Weight (All Categories)",
+]
+
+CARGO_OPERATION_FIELDS = [
+    "Cargo Weight Added [MT]", "Cargo Weight Removed [MT]",
+    "TEU Loaded Units", "TEU Loaded Weight [tons]", "TEU Discharged Units", "TEU Discharged Weight [tons]",
+    "FEU Loaded Units", "FEU Loaded Weight [tons]", "FEU Discharged Units", "FEU Discharged Weight [tons]",
+    "Reefers Loaded Units", "Reefers Loaded Weight [tons]", "Reefers Discharged Units", "Reefers Discharged Weight [tons]",
+    "Commenced Cargo Operation Time [dd:mm:yyyy hh:mm]", "Completed Cargo Operation Time [dd:mm:yyyy hh:mm]",
+    "Cargo Operations Completed During Port Stay", "Cargo Checked: Bridges", "Cargo Checked: Lashings",
+]
+
+CARGO_DRAFT_FIELDS = [
+    "Draft Forward [m] (m)", "Draft Aft [m] (m)",
+    "Observed Draft Forward [m]", "Observed Draft Aft [m]", "Observed Mean Draft [m]",
+    "Calculated Draft Forward [m]", "Calculated Draft Aft [m]", "Calculated Mean Draft [m]",
+    "Ballast Amount [tons]", "Dead Load [tons]", "Air Draft [m]",
+]
+
+
+def cargo_value_keys() -> set[str]:
+    return {
+        normalize_text(alias)
+        for aliases in CARGO_VALUE_ALIASES.values()
+        for alias in aliases
+    }
+
+
+def cargo_first_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+    normalized = {normalize_text(column): column for column in df.columns}
+    for candidate in candidates:
+        found = normalized.get(normalize_text(candidate))
+        if found:
+            return found
+    return None
+
+
+def cargo_numeric_series(df: pd.DataFrame, column: str | None) -> pd.Series:
+    if not column or column not in df.columns:
+        return pd.Series(pd.NA, index=df.index, dtype="Float64")
+    return pd.to_numeric(df[column], errors="coerce")
+
+
+def cargo_latest_value(df: pd.DataFrame, column: str | None) -> Any:
+    if not column or column not in df.columns or df.empty:
+        return pd.NA
+    values = df[column]
+    nonempty = values[values.notna() & values.astype("string").str.strip().ne("")]
+    return nonempty.iloc[-1] if not nonempty.empty else pd.NA
+
+
+def cargo_format_number(value: Any, decimals: int = 1) -> str:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return "-"
+    return f"{float(numeric):,.{decimals}f}"
+
+
+def build_voyage_catalog(shippivots_df: pd.DataFrame) -> pd.DataFrame:
+    if shippivots_df.empty or "VoyageId" not in shippivots_df.columns or "DateTime" not in shippivots_df.columns:
+        return pd.DataFrame(columns=["VoyageId", "VoyageIdInternal", "VoyageStart", "VoyageEnd", "Points"])
+    work = shippivots_df.copy()
+    work["DateTime"] = pd.to_datetime(work["DateTime"], errors="coerce", utc=True)
+    work["VoyageId"] = work["VoyageId"].astype("string").str.strip()
+    work = work[work["DateTime"].notna() & work["VoyageId"].notna() & work["VoyageId"].ne("")].copy()
+    if work.empty:
+        return pd.DataFrame(columns=["VoyageId", "VoyageIdInternal", "VoyageStart", "VoyageEnd", "Points"])
+    agg_map: dict[str, Any] = {"VoyageStart": ("DateTime", "min"), "VoyageEnd": ("DateTime", "max"), "Points": ("DateTime", "size")}
+    if "VoyageIdInternal" in work.columns:
+        catalog = work.groupby("VoyageId", dropna=False).agg(
+            VoyageStart=("DateTime", "min"),
+            VoyageEnd=("DateTime", "max"),
+            Points=("DateTime", "size"),
+            VoyageIdInternal=("VoyageIdInternal", lambda s: cargo_latest_value(pd.DataFrame({"x": s}), "x")),
+        ).reset_index()
+    else:
+        catalog = work.groupby("VoyageId", dropna=False).agg(
+            VoyageStart=("DateTime", "min"), VoyageEnd=("DateTime", "max"), Points=("DateTime", "size")
+        ).reset_index()
+        catalog["VoyageIdInternal"] = pd.NA
+    return catalog.sort_values("VoyageEnd", ascending=False).reset_index(drop=True)
+
+
+def cargo_voyage_label(row: pd.Series) -> str:
+    start = pd.to_datetime(row.get("VoyageStart"), errors="coerce", utc=True)
+    end = pd.to_datetime(row.get("VoyageEnd"), errors="coerce", utc=True)
+    start_text = start.strftime("%d/%m/%Y %H:%M") if not pd.isna(start) else "-"
+    end_text = end.strftime("%d/%m/%Y %H:%M") if not pd.isna(end) else "-"
+    internal_value = row.get("VoyageIdInternal")
+    internal = "" if pd.isna(internal_value) else str(internal_value).strip()
+    internal_text = f" | {internal}" if internal and internal.lower() not in {"<na>", "nan", "none"} else ""
+    return f"{row.get('VoyageId', '-')}{internal_text} | {start_text} → {end_text}"
+
+
+def cargo_reportdata_for_voyage(
+    long_df: pd.DataFrame,
+    vessel: str,
+    voyage_start: pd.Timestamp,
+    voyage_end: pd.Timestamp,
+) -> pd.DataFrame:
+    if long_df.empty:
+        return long_df.copy()
+    vessel_mask = match_selected_vessels(long_df["ShipName"], [vessel])
+    start_values = pd.to_datetime(long_df["StartDateTimeGMT"], errors="coerce", utc=True)
+    end_values = pd.to_datetime(long_df["EndDateTimeGMT"], errors="coerce", utc=True)
+    margin = pd.Timedelta(hours=6)
+    time_mask = (
+        (start_values.ge(voyage_start - margin) & start_values.le(voyage_end + margin))
+        | (end_values.ge(voyage_start - margin) & end_values.le(voyage_end + margin))
+    )
+    keys = long_df["ValueDescription"].map(normalize_text)
+    return long_df.loc[vessel_mask & time_mask & keys.isin(cargo_value_keys())].copy()
+
+
+def pivot_cargo_reports(cargo_long: pd.DataFrame) -> pd.DataFrame:
+    if cargo_long.empty:
+        return pd.DataFrame(columns=CARGO_REPORT_IDENTITY_COLUMNS)
+    work = cargo_long.copy()
+    work["_source_order"] = range(len(work))
+    work = work.sort_values("_source_order").drop_duplicates(
+        [*CARGO_REPORT_IDENTITY_COLUMNS, "ValueDescription"], keep="last"
+    )
+    values = work["ParsedValue"].where(work["ParsedValue"].notna(), work["ReportedValue"])
+    work["_cargo_value"] = values
+    pivot = work.pivot(index=CARGO_REPORT_IDENTITY_COLUMNS, columns="ValueDescription", values="_cargo_value").reset_index()
+    pivot.columns.name = None
+    pivot["StartDateTimeGMT"] = pd.to_datetime(pivot["StartDateTimeGMT"], errors="coerce", utc=True)
+    pivot["EndDateTimeGMT"] = pd.to_datetime(pivot["EndDateTimeGMT"], errors="coerce", utc=True)
+    return pivot.sort_values(["StartDateTimeGMT", "ReportId"], ascending=[True, True]).reset_index(drop=True)
+
+
+def filter_reportpivots_for_voyage(
+    reportpivots_df: pd.DataFrame,
+    voyage_start: pd.Timestamp,
+    voyage_end: pd.Timestamp,
+) -> pd.DataFrame:
+    if reportpivots_df.empty or "DateTime" not in reportpivots_df.columns:
+        return reportpivots_df.copy()
+    result = reportpivots_df.copy()
+    result["DateTime"] = pd.to_datetime(result["DateTime"], errors="coerce", utc=True)
+    margin = pd.Timedelta(hours=6)
+    return result[result["DateTime"].ge(voyage_start - margin) & result["DateTime"].le(voyage_end + margin)].copy().sort_values("DateTime")
+
+
+def cargo_report_timeline(cargo_by_report: pd.DataFrame, rp_voyage: pd.DataFrame) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    if not cargo_by_report.empty:
+        rd = cargo_by_report.copy()
+        rd["DateTime"] = pd.to_datetime(rd["EndDateTimeGMT"], errors="coerce", utc=True).fillna(
+            pd.to_datetime(rd["StartDateTimeGMT"], errors="coerce", utc=True)
+        )
+        rd["Source"] = "ReportData"
+        keep = [column for column in ["DateTime", "Source", "ReportId", "ReportType", "StateName", "Cargo Weight [tons]", "TEU Loaded Units", "TEU Discharged Units", "Reefers Loaded Units", "Reefers Discharged Units"] if column in rd.columns]
+        frames.append(rd[keep])
+    if not rp_voyage.empty:
+        rp = rp_voyage.copy()
+        rp["Source"] = "ReportPivots"
+        if "ReportType" not in rp.columns:
+            rp["ReportType"] = "ReportPivots"
+        if "StateName" not in rp.columns:
+            rp["StateName"] = pd.NA
+        if "ReportId" not in rp.columns:
+            rp["ReportId"] = pd.NA
+        keep = [column for column in ["DateTime", "Source", "ReportId", "ReportType", "StateName", "CargoWeight", "CargoTEU", "DeparturePort", "ArrivalPort", "DraftFore", "DraftAft"] if column in rp.columns]
+        frames.append(rp[keep])
+    if not frames:
+        return pd.DataFrame()
+    timeline = pd.concat(frames, ignore_index=True, sort=False)
+    timeline["DateTime"] = pd.to_datetime(timeline["DateTime"], errors="coerce", utc=True)
+    return timeline.sort_values(["DateTime", "Source"], na_position="last").reset_index(drop=True)
+
+
+def cargo_excel_bytes(
+    overview: pd.DataFrame,
+    timeline: pd.DataFrame,
+    cargo_by_report: pd.DataFrame,
+    reportpivots: pd.DataFrame,
+    shippivots: pd.DataFrame,
+) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        write_table_sheet(writer, overview, "Voyage Overview", "CargoVoyageOverview")
+        if not timeline.empty:
+            write_table_sheet(writer, timeline, "Report Timeline", "CargoReportTimeline")
+        if not cargo_by_report.empty:
+            write_table_sheet(writer, cargo_by_report, "Cargo By Report", "CargoByReport")
+        if not reportpivots.empty:
+            write_table_sheet(writer, reportpivots, "ReportPivots", "CargoReportPivots")
+        if not shippivots.empty:
+            write_table_sheet(writer, shippivots, "ShipPivots", "CargoShipPivots")
+    return output.getvalue()
+
+
+def render_cargo_voyages_workspace(
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
+    api_start_date: date,
+    long_df: pd.DataFrame,
+    reportdata_metadata: dict[str, Any],
+    selected_vessels: list[str],
+    selected_start: date,
+    selected_end: date,
+) -> None:
+    st.markdown('<div class="section-title">Cargo & Voyages</div>', unsafe_allow_html=True)
+    st.caption(
+        "Voyage and report-level cargo view using ShipPivots.VoyageId, ReportPivots cargo/port fields, "
+        "and cargo/container values from ReportData. Normal users read the existing AtlasFlow snapshots."
+    )
+
+    if not selected_vessels:
+        st.info("Select at least one vessel in the sidebar.")
+        return
+    vessel = st.selectbox("Vessel", options=selected_vessels, key="atlas_cargo_vessel")
+
+    ship_df, ship_meta = load_wide_source_for_view(
+        "shippivots", username, password, token, auth_method, api_start_date, False,
+        [vessel], selected_start, selected_end,
+    )
+    rp_df, rp_meta = load_wide_source_for_view(
+        "reportpivots", username, password, token, auth_method, api_start_date, False,
+        [vessel], selected_start, selected_end,
+    )
+    if ship_meta.get("needs_warmup") or rp_meta.get("needs_warmup"):
+        missing = []
+        if ship_meta.get("needs_warmup"):
+            missing.append("ShipPivots")
+        if rp_meta.get("needs_warmup"):
+            missing.append("ReportPivots")
+        st.info("Cargo & Voyages needs prepared snapshots for: " + ", ".join(missing) + ". Run the AtlasFlow warmup first.")
+        return
+
+    voyage_catalog = build_voyage_catalog(ship_df)
+    if voyage_catalog.empty:
+        st.info("No VoyageId values were found for this vessel in the selected period.")
+        return
+
+    voyage_options = voyage_catalog.index.tolist()
+    selected_idx = st.selectbox(
+        "Voyage",
+        options=voyage_options,
+        format_func=lambda idx: cargo_voyage_label(voyage_catalog.loc[idx]),
+        key="atlas_cargo_voyage_idx",
+    )
+    voyage = voyage_catalog.loc[selected_idx]
+    voyage_id = str(voyage["VoyageId"])
+    voyage_start = pd.to_datetime(voyage["VoyageStart"], errors="coerce", utc=True)
+    voyage_end = pd.to_datetime(voyage["VoyageEnd"], errors="coerce", utc=True)
+    if pd.isna(voyage_start) or pd.isna(voyage_end):
+        st.warning("The selected voyage does not have a usable time interval.")
+        return
+
+    ship_work = ship_df.copy()
+    ship_work["DateTime"] = pd.to_datetime(ship_work["DateTime"], errors="coerce", utc=True)
+    ship_voyage = ship_work[
+        ship_work.get("VoyageId", pd.Series(index=ship_work.index, dtype="string")).astype("string").eq(voyage_id)
+    ].copy().sort_values("DateTime")
+    rp_voyage = filter_reportpivots_for_voyage(rp_df, voyage_start, voyage_end)
+    cargo_long = cargo_reportdata_for_voyage(long_df, vessel, voyage_start, voyage_end)
+    cargo_by_report = pivot_cargo_reports(cargo_long)
+    timeline = cargo_report_timeline(cargo_by_report, rp_voyage)
+
+    render_api_load_caption(reportdata_metadata)
+    st.caption(
+        f"ReportPivots load: {rp_meta.get('loaded_at_local', '-')} | "
+        f"ShipPivots load: {ship_meta.get('loaded_at_local', '-')}"
+    )
+
+    cargo_weight_col = cargo_first_column(rp_voyage, ["CargoWeight", "Cargo Weight", "CargoMT"])
+    cargo_teu_col = cargo_first_column(rp_voyage, ["CargoTEU", "Cargo TEU", "TEU"])
+    dep_col = cargo_first_column(rp_voyage, ["DeparturePort", "Departure Port", "PortFrom"])
+    arr_col = cargo_first_column(rp_voyage, ["ArrivalPort", "Arrival Port", "PortTo"])
+    draft_f_col = cargo_first_column(rp_voyage, ["DraftFore", "Draft Forward"])
+    draft_a_col = cargo_first_column(rp_voyage, ["DraftAft", "Draft Aft"])
+
+    cargo_weight = cargo_latest_value(rp_voyage, cargo_weight_col)
+    if pd.isna(pd.to_numeric(pd.Series([cargo_weight]), errors="coerce").iloc[0]) and "Cargo Weight [tons]" in cargo_by_report.columns:
+        cargo_weight = cargo_latest_value(cargo_by_report, "Cargo Weight [tons]")
+    cargo_teu = cargo_latest_value(rp_voyage, cargo_teu_col)
+    departure_port = cargo_latest_value(rp_voyage, dep_col)
+    arrival_port = cargo_latest_value(rp_voyage, arr_col)
+    duration_days = max((voyage_end - voyage_start).total_seconds() / 86400.0, 0.0)
+
+    render_metric_cards([
+        ("Cargo Weight [MT]", cargo_format_number(cargo_weight, 1), "total"),
+        ("Cargo TEU", cargo_format_number(cargo_teu, 1), "columns_plus"),
+        ("Voyage Duration", f"{duration_days:,.2f} days", "numeric"),
+        ("Reports", f"{len(cargo_by_report):,}", "table_eye"),
+    ])
+    st.markdown(
+        f'<div class="atlas-pill"><span>Voyage:</span> {escape(voyage_id)} &nbsp; | &nbsp; '
+        f'<span>Departure:</span> {escape(str(departure_port if pd.notna(departure_port) else "-"))} &nbsp; | &nbsp; '
+        f'<span>Arrival:</span> {escape(str(arrival_port if pd.notna(arrival_port) else "-"))}</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="section-title">Cargo status by report</div>', unsafe_allow_html=True)
+    status_columns = [column for column in [
+        "ReportId", "ReportType", "StartDateTimeGMT", "EndDateTimeGMT", "StateName",
+        "Cargo Weight [tons]", "Total Number Full Units (20 and 40ft)",
+        "Total Number Empty Units (20 and 40ft)", "Total Number Reefer Units (20 and 40ft)",
+        "Total Number DG Units (20 and 40ft)", "TEU Loaded Units", "TEU Discharged Units",
+        "Reefers Loaded Units", "Reefers Discharged Units",
+    ] if column in cargo_by_report.columns]
+    if status_columns:
+        render_preview_table(cargo_by_report[status_columns])
+    else:
+        st.info(
+            "No cargo ReportData rows are available in the current prepared snapshot for this voyage. "
+            "Because cargo fields were newly added to AtlasFlow, run a ReportData warmup after deploying this batch."
+        )
+
+    st.markdown('<div class="section-title">Report / port timeline</div>', unsafe_allow_html=True)
+    timeline_display = timeline.copy()
+    if not timeline_display.empty:
+        render_preview_table(timeline_display)
+    else:
+        st.info("No report timeline rows were found for the selected voyage.")
+
+    if not rp_voyage.empty:
+        chart_source = rp_voyage.copy()
+        chart_source["DateTime"] = pd.to_datetime(chart_source["DateTime"], errors="coerce", utc=True)
+        chart_cols: list[str] = []
+        for col in [cargo_weight_col, cargo_teu_col]:
+            if col and col in chart_source.columns:
+                chart_source[col] = pd.to_numeric(chart_source[col], errors="coerce")
+                if chart_source[col].notna().any():
+                    chart_cols.append(col)
+        if chart_cols:
+            st.markdown('<div class="section-title">Cargo evolution</div>', unsafe_allow_html=True)
+            st.line_chart(chart_source.dropna(subset=["DateTime"]).set_index("DateTime")[chart_cols])
+
+    if not cargo_by_report.empty:
+        st.markdown('<div class="section-title">Selected report details</div>', unsafe_allow_html=True)
+        report_rows = cargo_by_report.reset_index(drop=True)
+        report_options = report_rows.index.tolist()
+        report_idx = st.selectbox(
+            "Report",
+            options=report_options,
+            format_func=lambda idx: (
+                f"{pd.to_datetime(report_rows.loc[idx, 'StartDateTimeGMT'], errors='coerce', utc=True).strftime('%d/%m/%Y %H:%M') if pd.notna(pd.to_datetime(report_rows.loc[idx, 'StartDateTimeGMT'], errors='coerce', utc=True)) else '-'}"
+                f" | {report_rows.loc[idx, 'ReportType']} | Report {report_rows.loc[idx, 'ReportId']}"
+            ),
+            key="atlas_cargo_report_idx",
+        )
+        selected_report = report_rows.loc[[report_idx]].copy()
+        detail_tabs = ["Cargo Summary", "Containers", "Operations", "Draft & Ballast"]
+        detail_tab = render_text_tab_bar(
+            detail_tabs,
+            st.session_state.get("atlas_cargo_detail_tab", "Cargo Summary"),
+            param_name="cargo_detail",
+            css_class="cargo-detail",
+        )
+        st.session_state["atlas_cargo_detail_tab"] = detail_tab
+        fields_map = {
+            "Cargo Summary": CARGO_SUMMARY_FIELDS,
+            "Containers": CARGO_CONTAINER_FIELDS,
+            "Operations": CARGO_OPERATION_FIELDS,
+            "Draft & Ballast": CARGO_DRAFT_FIELDS,
+        }
+        fields = [column for column in [*CARGO_REPORT_IDENTITY_COLUMNS, *fields_map[detail_tab]] if column in selected_report.columns]
+        detail_df = selected_report[fields].copy()
+        # Transpose value fields for easier single-report reading while retaining identity above.
+        identity = [column for column in CARGO_REPORT_IDENTITY_COLUMNS if column in detail_df.columns]
+        value_fields = [column for column in detail_df.columns if column not in identity]
+        if value_fields:
+            key_values = pd.DataFrame({
+                "Field": value_fields,
+                "Value": [detail_df.iloc[0][column] for column in value_fields],
+            })
+            key_values = key_values[key_values["Value"].notna()].copy()
+            render_preview_table(key_values)
+        else:
+            st.info("No values are available in this category for the selected report.")
+
+    overview = pd.DataFrame([{
+        "ShipName": vessel,
+        "VoyageId": voyage_id,
+        "VoyageIdInternal": voyage.get("VoyageIdInternal"),
+        "VoyageStart": voyage_start,
+        "VoyageEnd": voyage_end,
+        "DurationDays": duration_days,
+        "DeparturePort": departure_port,
+        "ArrivalPort": arrival_port,
+        "CargoWeightMT": cargo_weight,
+        "CargoTEU": cargo_teu,
+        "DraftFore": cargo_latest_value(rp_voyage, draft_f_col),
+        "DraftAft": cargo_latest_value(rp_voyage, draft_a_col),
+        "CargoReports": len(cargo_by_report),
+    }])
+    export_signature = sha256(f"{vessel}|{voyage_id}|{voyage_start}|{voyage_end}|{len(cargo_by_report)}|{len(rp_voyage)}".encode("utf-8")).hexdigest()
+    cargo_export_ready = (
+        st.session_state.get("atlas_cargo_export_signature") == export_signature
+        and "atlas_cargo_export_bytes" in st.session_state
+    )
+    if st.button("Prepare voyage Excel", type="primary", key="atlas_prepare_cargo_excel"):
+        with st.spinner("Preparing voyage workbook..."):
+            st.session_state["atlas_cargo_export_bytes"] = cargo_excel_bytes(
+                overview, timeline, cargo_by_report, rp_voyage, ship_voyage
+            )
+            st.session_state["atlas_cargo_export_signature"] = export_signature
+        cargo_export_ready = True
+    if cargo_export_ready:
+        st.download_button(
+            "Download voyage Excel",
+            data=st.session_state["atlas_cargo_export_bytes"],
+            file_name=f"atlasflow_cargo_{normalize_text(vessel)}_{normalize_text(voyage_id)}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="atlas_download_cargo_excel",
+        )
+
 # =============================================================================
 # Main app
 # =============================================================================
@@ -8162,6 +8675,7 @@ def main() -> None:
 
     workspace_options = [
         "Monthly Comparison",
+        "Cargo & Voyages",
         "Custom Analytics",
         "Noon & Manual Reports",
         "15-Minute Operations",
@@ -8189,7 +8703,9 @@ def main() -> None:
     st.session_state["atlas_workspace"] = workspace
 
     active_wide_sources: set[str] = set()
-    if workspace == "Noon & Manual Reports":
+    if workspace == "Cargo & Voyages":
+        active_wide_sources.update({"reportpivots", "shippivots"})
+    elif workspace == "Noon & Manual Reports":
         active_wide_sources.add("reportpivots")
     elif workspace == "15-Minute Operations":
         active_wide_sources.add("shippivots")
@@ -8210,8 +8726,9 @@ def main() -> None:
             "The loaded dataset may be incomplete. Check API Diagnostics before using the export."
         )
 
-    if workspace == "Monthly Comparison":
-        # The comparison workspace reads pre-aggregated monthly summaries and
+    if workspace in {"Monthly Comparison", "Cargo & Voyages"}:
+        # Monthly Comparison reads pre-aggregated summaries. Cargo & Voyages
+        # builds its own voyage/report views directly from the prepared sources.
         # does not need to build the report-level pivot or its filter controls.
         pivot_df = pd.DataFrame()
         filtered_pivot_df = pd.DataFrame()
@@ -8277,6 +8794,20 @@ def main() -> None:
         render_monthly_comparison_workspace(
             username,
             auth_method,
+            selected_vessels,
+            selected_start,
+            selected_end,
+        )
+
+    elif workspace == "Cargo & Voyages":
+        render_cargo_voyages_workspace(
+            username,
+            password,
+            token,
+            auth_method,
+            api_start_date,
+            long_df,
+            metadata,
             selected_vessels,
             selected_start,
             selected_end,
