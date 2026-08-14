@@ -8171,7 +8171,7 @@ def main() -> None:
     ]
 
     render_header(selected_group, selected_vessels, selected_variables)
-    render_api_load_caption(metadata)
+    
 
     # Top navigation keeps the previous tab-like layout while preserving the
     # memory optimization: only the selected workspace loads its heavy data.
