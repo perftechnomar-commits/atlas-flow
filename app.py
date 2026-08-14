@@ -8285,6 +8285,8 @@ def main() -> None:
     elif workspace == "Custom Analytics":
         st.markdown('<div class="section-title">Custom Analytics Preview & Export</div>', unsafe_allow_html=True)
 
+        render_api_load_caption(metadata)
+
         summary_builder_columns = [column for column in output_df.columns]
         summary_value_options = numeric_column_options(output_df)
 
