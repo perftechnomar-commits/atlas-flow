@@ -1391,7 +1391,6 @@ def apply_custom_css() -> None:
         }
         </style>
         <div class="atlas-topbar-brand" aria-hidden="true">
-            <div class="atlas-menu-lines"><span></span></div>
             <div class="atlas-logo-mark"></div>
             <div class="atlas-brand-word">Atlas Flow</div>
         </div>
@@ -8405,6 +8404,73 @@ def filter_reportpivots_for_voyage(
     return result[result["DateTime"].ge(voyage_start) & result["DateTime"].le(voyage_end)].copy().sort_values("DateTime")
 
 
+def build_cargo_evolution_series(
+    rp_voyage: pd.DataFrame,
+    voyage_start: pd.Timestamp,
+    voyage_end: pd.Timestamp,
+    cargo_weight_col: str | None,
+    cargo_teu_col: str | None,
+    initial_cargo_weight: Any = pd.NA,
+    initial_cargo_teu: Any = pd.NA,
+) -> pd.DataFrame:
+    """Build continuous onboard-cargo state across the whole selected voyage.
+
+    ReportPivots cargo values are sparse: most sea/COSP/EOSP rows do not repeat
+    CargoWeight/CargoTEU. For voyage analysis those values represent onboard
+    state, so carry the latest observed value forward until a new cargo value is
+    reported. Seed the series from the voyage-overview departure cargo value and
+    always include voyage start/end so a single known cargo state still renders
+    as a visible line across the voyage.
+    """
+    if pd.isna(voyage_start) or pd.isna(voyage_end):
+        return pd.DataFrame(columns=["DateTime", "Cargo Weight [MT]", "Cargo TEU"])
+
+    base_times = pd.Series([voyage_start, voyage_end], dtype="datetime64[ns, UTC]")
+    work = rp_voyage.copy() if isinstance(rp_voyage, pd.DataFrame) else pd.DataFrame()
+    if not work.empty and "DateTime" in work.columns:
+        rp_times = pd.to_datetime(work["DateTime"], errors="coerce", utc=True).dropna()
+        base_times = pd.concat([base_times, rp_times], ignore_index=True)
+
+    evolution = pd.DataFrame({"DateTime": base_times.dropna().drop_duplicates().sort_values()})
+    evolution["Cargo Weight [MT]"] = pd.NA
+    evolution["Cargo TEU"] = pd.NA
+
+    # Seed the voyage with the cargo condition selected for the overview row.
+    initial_weight = pd.to_numeric(pd.Series([initial_cargo_weight]), errors="coerce").iloc[0]
+    initial_teu = pd.to_numeric(pd.Series([initial_cargo_teu]), errors="coerce").iloc[0]
+    if pd.notna(initial_weight):
+        evolution.loc[evolution["DateTime"].eq(voyage_start), "Cargo Weight [MT]"] = float(initial_weight)
+    if pd.notna(initial_teu):
+        evolution.loc[evolution["DateTime"].eq(voyage_start), "Cargo TEU"] = float(initial_teu)
+
+    if not work.empty and "DateTime" in work.columns:
+        work["DateTime"] = pd.to_datetime(work["DateTime"], errors="coerce", utc=True)
+        work = work[work["DateTime"].notna()].copy()
+        observation_frames: list[pd.DataFrame] = []
+        if cargo_weight_col and cargo_weight_col in work.columns:
+            weight_obs = work[["DateTime", cargo_weight_col]].copy()
+            weight_obs["Cargo Weight [MT]"] = pd.to_numeric(weight_obs[cargo_weight_col], errors="coerce")
+            observation_frames.append(weight_obs[["DateTime", "Cargo Weight [MT]"]])
+        if cargo_teu_col and cargo_teu_col in work.columns:
+            teu_obs = work[["DateTime", cargo_teu_col]].copy()
+            teu_obs["Cargo TEU"] = pd.to_numeric(teu_obs[cargo_teu_col], errors="coerce")
+            observation_frames.append(teu_obs[["DateTime", "Cargo TEU"]])
+
+        for observations in observation_frames:
+            value_column = next(column for column in observations.columns if column != "DateTime")
+            observations = observations.dropna(subset=[value_column]).sort_values("DateTime")
+            if observations.empty:
+                continue
+            observations = observations.drop_duplicates("DateTime", keep="last")
+            mapping = observations.set_index("DateTime")[value_column]
+            evolution[value_column] = evolution["DateTime"].map(mapping).combine_first(evolution[value_column])
+
+    for value_column in ["Cargo Weight [MT]", "Cargo TEU"]:
+        evolution[value_column] = pd.to_numeric(evolution[value_column], errors="coerce").ffill()
+
+    return evolution.sort_values("DateTime").reset_index(drop=True)
+
+
 def cargo_report_timeline(cargo_by_report: pd.DataFrame, rp_voyage: pd.DataFrame) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     if not cargo_by_report.empty:
@@ -8807,18 +8873,32 @@ def render_cargo_voyages_workspace(
     else:
         st.info("No report timeline rows were found for the selected voyage.")
 
-    if not rp_voyage.empty:
-        chart_source = rp_voyage.copy()
-        chart_source["DateTime"] = pd.to_datetime(chart_source["DateTime"], errors="coerce", utc=True)
-        chart_cols: list[str] = []
-        for col in [cargo_weight_col, cargo_teu_col]:
-            if col and col in chart_source.columns:
-                chart_source[col] = pd.to_numeric(chart_source[col], errors="coerce")
-                if chart_source[col].notna().any():
-                    chart_cols.append(col)
-        if chart_cols:
-            st.markdown('<div class="section-title">Cargo evolution</div>', unsafe_allow_html=True)
-            st.line_chart(chart_source.dropna(subset=["DateTime"]).set_index("DateTime")[chart_cols])
+    cargo_evolution = build_cargo_evolution_series(
+        rp_voyage,
+        voyage_start,
+        voyage_end,
+        cargo_weight_col,
+        cargo_teu_col,
+        initial_cargo_weight=cargo_weight,
+        initial_cargo_teu=cargo_teu,
+    )
+    evolution_columns = [
+        column
+        for column in ["Cargo Weight [MT]", "Cargo TEU"]
+        if column in cargo_evolution.columns and pd.to_numeric(cargo_evolution[column], errors="coerce").notna().any()
+    ]
+    if evolution_columns:
+        st.markdown('<div class="section-title">Cargo evolution</div>', unsafe_allow_html=True)
+        st.caption(
+            "Cargo values are treated as onboard state: the latest reported value is carried forward until a new cargo observation is reported."
+        )
+        chart_indexed = cargo_evolution.set_index("DateTime")
+        if "Cargo Weight [MT]" in evolution_columns:
+            st.markdown("**Cargo Weight [MT]**")
+            st.line_chart(chart_indexed[["Cargo Weight [MT]"]], use_container_width=True)
+        if "Cargo TEU" in evolution_columns:
+            st.markdown("**Cargo TEU**")
+            st.line_chart(chart_indexed[["Cargo TEU"]], use_container_width=True)
 
     st.markdown('<div class="section-title">Fuel consumption by report</div>', unsafe_allow_html=True)
     if not fuel_voyage.empty:
