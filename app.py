@@ -226,7 +226,7 @@ PERFORMANCE_KPI_VALUE_ALIASES = {
 
 # Cargo / voyage values discovered in the live Marorka V1 ReportData scan.
 # Keep these in a dedicated controlled group so AtlasFlow can support the
-# Cargo & Voyages workspace without broad-loading every ReportData variable.
+# Voyage Analysis workspace without broad-loading every ReportData variable.
 CARGO_VALUE_ALIASES = {
     "Cargo Weight [tons]": ["Cargo Weight [tons]"],
     "Cargo Weight Added [MT]": ["Cargo Weight Added [MT]", "Cargo Weight Added [tons]"],
@@ -8068,7 +8068,7 @@ def run_warmup_if_requested() -> None:
 
 
 # =============================================================================
-# Cargo & Voyages workspace
+# Voyage Analysis workspace
 # =============================================================================
 
 CARGO_REPORT_IDENTITY_COLUMNS = [
@@ -8626,7 +8626,7 @@ def render_cargo_voyages_workspace(
     selected_start: date,
     selected_end: date,
 ) -> None:
-    st.markdown('<div class="section-title">Cargo & Voyages</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Voyage Analysis</div>', unsafe_allow_html=True)
     st.caption(
         "Compact voyage overview for the selected vessels and period. Open Voyage Detail only when a specific voyage needs investigation."
     )
@@ -8649,7 +8649,7 @@ def render_cargo_voyages_workspace(
             missing.append("ShipPivots")
         if rp_meta.get("needs_warmup"):
             missing.append("ReportPivots")
-        st.info("Cargo & Voyages needs prepared snapshots for: " + ", ".join(missing) + ". Run the AtlasFlow warmup first.")
+        st.info("Voyage Analysis needs prepared snapshots for: " + ", ".join(missing) + ". Run the AtlasFlow warmup first.")
         return
 
     overview = build_cargo_voyage_overview(ship_df, rp_df, long_df, selected_vessels)
@@ -9067,7 +9067,7 @@ def main() -> None:
 
     workspace_options = [
         "Monthly Comparison",
-        "Cargo & Voyages",
+        "Voyage Analysis",
         "Custom Analytics",
         "Noon & Manual Reports",
         "15-Minute Operations",
@@ -9095,7 +9095,7 @@ def main() -> None:
     st.session_state["atlas_workspace"] = workspace
 
     active_wide_sources: set[str] = set()
-    if workspace == "Cargo & Voyages":
+    if workspace == "Voyage Analysis":
         active_wide_sources.update({"reportpivots", "shippivots"})
     elif workspace == "Noon & Manual Reports":
         active_wide_sources.add("reportpivots")
@@ -9118,8 +9118,8 @@ def main() -> None:
             "The loaded dataset may be incomplete. Check API Diagnostics before using the export."
         )
 
-    if workspace in {"Monthly Comparison", "Cargo & Voyages"}:
-        # Monthly Comparison reads pre-aggregated summaries. Cargo & Voyages
+    if workspace in {"Monthly Comparison", "Voyage Analysis"}:
+        # Monthly Comparison reads pre-aggregated summaries. Voyage Analysis
         # builds its own voyage/report views directly from the prepared sources.
         # does not need to build the report-level pivot or its filter controls.
         pivot_df = pd.DataFrame()
@@ -9191,7 +9191,7 @@ def main() -> None:
             selected_end,
         )
 
-    elif workspace == "Cargo & Voyages":
+    elif workspace == "Voyage Analysis":
         render_cargo_voyages_workspace(
             username,
             password,
