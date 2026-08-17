@@ -2654,7 +2654,7 @@ def format_display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for column in display_df.columns:
         series = display_df[column]
 
-        if column in {"StartDateTimeGMT", "EndDateTimeGMT"}:
+        if column in {"StartDateTimeGMT", "EndDateTimeGMT"} or pd.api.types.is_datetime64_any_dtype(series):
             formatted = pd.to_datetime(series, errors="coerce").dt.strftime(DISPLAY_DATETIME_FORMAT)
             display_df[column] = formatted.astype("string").fillna("-")
             continue
@@ -8295,23 +8295,99 @@ def build_cargo_voyage_overview(
     long_df: pd.DataFrame,
     selected_vessels: list[str],
 ) -> pd.DataFrame:
-    """Build one compact row per vessel/voyage for mass review."""
+    """Build one compact row per vessel/voyage for mass review.
+
+    Performance note: the old implementation rescanned the complete ReportData
+    snapshot once for *every* voyage.  That became very slow as soon as a vessel
+    had several voyages, and was not viable for fleet/all-vessel overview.
+    This version filters/pivots the selected cargo ReportData only once, then
+    slices that much smaller report table by vessel/voyage interval.
+    """
+    if not selected_vessels or ship_df.empty:
+        return pd.DataFrame()
+
+    # Parse the two wide sources once, rather than inside every voyage loop.
+    ship_work = ship_df.copy()
+    if "DateTime" in ship_work.columns:
+        ship_work["DateTime"] = pd.to_datetime(ship_work["DateTime"], errors="coerce", utc=True)
+    rp_work = rp_df.copy()
+    if "DateTime" in rp_work.columns:
+        rp_work["DateTime"] = pd.to_datetime(rp_work["DateTime"], errors="coerce", utc=True)
+
+    # Restrict ReportData once to selected vessels + the time span represented by
+    # ShipPivots, then pivot all cargo reports once.  This removes the expensive
+    # normalize/match/pivot pass that previously ran for every voyage.
+    cargo_reports_all = pd.DataFrame(columns=CARGO_REPORT_IDENTITY_COLUMNS)
+    if (
+        isinstance(long_df, pd.DataFrame)
+        and not long_df.empty
+        and "ShipName" in long_df.columns
+        and "ValueDescription" in long_df.columns
+    ):
+        vessel_mask = match_selected_vessels(long_df["ShipName"], selected_vessels)
+        cargo_key_mask = long_df["ValueDescription"].map(normalize_text).isin(cargo_value_keys())
+
+        time_mask = pd.Series(True, index=long_df.index)
+        if "DateTime" in ship_work.columns and ship_work["DateTime"].notna().any():
+            span_start = ship_work["DateTime"].min() - pd.Timedelta(hours=6)
+            span_end = ship_work["DateTime"].max() + pd.Timedelta(hours=6)
+            rd_start = pd.to_datetime(long_df.get("StartDateTimeGMT"), errors="coerce", utc=True)
+            rd_end = pd.to_datetime(long_df.get("EndDateTimeGMT"), errors="coerce", utc=True)
+            time_mask = (
+                (rd_start.ge(span_start) & rd_start.le(span_end))
+                | (rd_end.ge(span_start) & rd_end.le(span_end))
+            )
+
+        cargo_selected = long_df.loc[vessel_mask & cargo_key_mask & time_mask].copy()
+        if not cargo_selected.empty:
+            cargo_reports_all = pivot_cargo_reports(cargo_selected)
+        del cargo_selected
+
     rows: list[dict[str, Any]] = []
+    margin = pd.Timedelta(hours=6)
     for vessel in selected_vessels:
-        vessel_ship = _cargo_subset_vessel(ship_df, vessel)
-        vessel_rp = _cargo_subset_vessel(rp_df, vessel)
+        vessel_ship = _cargo_subset_vessel(ship_work, vessel)
+        vessel_rp = _cargo_subset_vessel(rp_work, vessel)
+        vessel_cargo_reports = (
+            _cargo_subset_vessel(cargo_reports_all, vessel)
+            if not cargo_reports_all.empty and "ShipName" in cargo_reports_all.columns
+            else cargo_reports_all.iloc[0:0].copy()
+        )
+
         catalog = build_voyage_catalog(vessel_ship)
         if catalog.empty:
             continue
+
+        rp_dates = (
+            pd.to_datetime(vessel_rp["DateTime"], errors="coerce", utc=True)
+            if "DateTime" in vessel_rp.columns
+            else pd.Series(pd.NaT, index=vessel_rp.index, dtype="datetime64[ns, UTC]")
+        )
+        cargo_start_dates = (
+            pd.to_datetime(vessel_cargo_reports["StartDateTimeGMT"], errors="coerce", utc=True)
+            if "StartDateTimeGMT" in vessel_cargo_reports.columns
+            else pd.Series(pd.NaT, index=vessel_cargo_reports.index, dtype="datetime64[ns, UTC]")
+        )
+        cargo_end_dates = (
+            pd.to_datetime(vessel_cargo_reports["EndDateTimeGMT"], errors="coerce", utc=True)
+            if "EndDateTimeGMT" in vessel_cargo_reports.columns
+            else pd.Series(pd.NaT, index=vessel_cargo_reports.index, dtype="datetime64[ns, UTC]")
+        )
+
         for _, voyage in catalog.iterrows():
             voyage_id = str(voyage.get("VoyageId", ""))
             voyage_start = pd.to_datetime(voyage.get("VoyageStart"), errors="coerce", utc=True)
             voyage_end = pd.to_datetime(voyage.get("VoyageEnd"), errors="coerce", utc=True)
             if pd.isna(voyage_start) or pd.isna(voyage_end):
                 continue
-            rp_voyage = filter_reportpivots_for_voyage(vessel_rp, voyage_start, voyage_end)
-            cargo_long = cargo_reportdata_for_voyage(long_df, vessel, voyage_start, voyage_end)
-            cargo_by_report = pivot_cargo_reports(cargo_long)
+
+            rp_voyage = vessel_rp.loc[
+                rp_dates.ge(voyage_start - margin) & rp_dates.le(voyage_end + margin)
+            ].copy()
+            cargo_by_report = vessel_cargo_reports.loc[
+                (cargo_start_dates.ge(voyage_start - margin) & cargo_start_dates.le(voyage_end + margin))
+                | (cargo_end_dates.ge(voyage_start - margin) & cargo_end_dates.le(voyage_end + margin))
+            ].copy()
 
             cargo_weight_col = cargo_first_column(rp_voyage, ["CargoWeight", "Cargo Weight", "CargoMT"])
             cargo_teu_col = cargo_first_column(rp_voyage, ["CargoTEU", "Cargo TEU", "TEU"])
@@ -8342,6 +8418,7 @@ def build_cargo_voyage_overview(
                 "Cargo Reports": int(len(cargo_by_report)),
                 "ShipPivots Points": int(voyage.get("Points", 0) or 0),
             })
+
     if not rows:
         return pd.DataFrame()
     result = pd.DataFrame(rows)
