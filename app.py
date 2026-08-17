@@ -287,6 +287,13 @@ CARGO_VALUE_ALIASES = {
     "Reefer Energy [kWh]": ["Reefer Energy [kWh]"],
     "Total Reefer Power Draw (kW)": ["Total Reefer Power Draw (kW)"],
     "Average Power per Reefer [kW]": ["Average Power per Reefer [kW]"],
+
+    # Voyage route context. Marorka ReportPivots exposes UN/LOCODEs only, while
+    # ReportData also carries the user-facing full port names on Departure/Arrival reports.
+    "Departure port name": ["Departure port name"],
+    "Arrival port name": ["Arrival port name"],
+    "Departure port UN/LOCODE": ["Departure port UN/LOCODE"],
+    "Arrival port UN/LOCODE": ["Arrival port UN/LOCODE"],
 }
 
 REPORTDATA_VALUE_WHITELIST = sorted(
@@ -8141,6 +8148,16 @@ VOYAGE_FUEL_VALUE_KEYS = set(VOYAGE_FUEL_ALIAS_TO_CANONICAL) | {
     for alias in PERFORMANCE_KPI_VALUE_ALIASES.get("Total Fuel Consumed", ["Total Fuel Consumed"])
 }
 
+VOYAGE_OVERVIEW_NUMERIC_COLUMNS = [
+    "Duration [days]",
+    "Cargo [MT]",
+    "Cargo TEU",
+    "Total Fuel Consumption [MT]",
+    "Total MGO Consumption [MT]",
+    "Total HFO Consumption [MT]",
+    "Total LFO Consumption [MT]",
+]
+
 
 def cargo_value_keys() -> set[str]:
     return {
@@ -8517,11 +8534,27 @@ def build_cargo_voyage_overview(
 
             cargo_weight = cargo_departure_value(rp_cargo, cargo_weight_col, voyage_start, voyage_end)
             cargo_teu = cargo_departure_value(rp_cargo, cargo_teu_col, voyage_start, voyage_end)
-            if pd.isna(pd.to_numeric(pd.Series([cargo_weight]), errors="coerce").iloc[0]) and "Cargo Weight [tons]" in cargo_by_report.columns:
+
+            # ReportData carries the full port names. Prefer the route stamped on
+            # the departure cargo/report just before the VoyageId starts, then
+            # fall back to the ReportPivots UN/LOCODE. This gives users e.g.
+            # "Xiamen → Kaohsiung" instead of "CNXMN → TWKHH".
+            departure_port = cargo_first_value(rp_route, dep_col)
+            arrival_port = cargo_first_value(rp_route, arr_col)
+            if not cargo_by_report.empty:
                 report_times = report_event_time(cargo_by_report)
                 temp = cargo_by_report.copy()
                 temp["_ReportEventTime"] = report_times
-                cargo_weight = cargo_departure_value(temp, "Cargo Weight [tons]", voyage_start, voyage_end, datetime_column="_ReportEventTime")
+                if pd.isna(pd.to_numeric(pd.Series([cargo_weight]), errors="coerce").iloc[0]) and "Cargo Weight [tons]" in temp.columns:
+                    cargo_weight = cargo_departure_value(temp, "Cargo Weight [tons]", voyage_start, voyage_end, datetime_column="_ReportEventTime")
+                if "Departure port name" in temp.columns:
+                    full_departure = cargo_departure_value(temp, "Departure port name", voyage_start, voyage_end, datetime_column="_ReportEventTime")
+                    if pd.notna(full_departure) and str(full_departure).strip():
+                        departure_port = full_departure
+                if "Arrival port name" in temp.columns:
+                    full_arrival = cargo_departure_value(temp, "Arrival port name", voyage_start, voyage_end, datetime_column="_ReportEventTime")
+                    if pd.notna(full_arrival) and str(full_arrival).strip():
+                        arrival_port = full_arrival
 
             fuel_voyage = fuel_reports_for_voyage(fuel_reports_all, vessel, voyage_start, voyage_end)
             fuel_totals = voyage_fuel_totals(fuel_voyage)
@@ -8532,8 +8565,8 @@ def build_cargo_voyage_overview(
                 "Start": voyage_start,
                 "End": voyage_end,
                 "Duration [days]": max((voyage_end - voyage_start).total_seconds() / 86400.0, 0.0),
-                "Departure": cargo_first_value(rp_route, dep_col),
-                "Arrival": cargo_first_value(rp_route, arr_col),
+                "Departure": departure_port,
+                "Arrival": arrival_port,
                 "Cargo [MT]": cargo_weight,
                 "Cargo TEU": cargo_teu,
                 "Total Fuel Consumption [MT]": fuel_totals["Total Fuel Consumption [MT]"],
@@ -8545,13 +8578,39 @@ def build_cargo_voyage_overview(
     if not rows:
         return pd.DataFrame()
     result = pd.DataFrame(rows)
+    result["VoyageId"] = result["VoyageId"].astype("string").fillna("-").str.strip().replace("", "-")
+    for column in VOYAGE_OVERVIEW_NUMERIC_COLUMNS:
+        if column in result.columns:
+            result[column] = pd.to_numeric(result[column], errors="coerce").round(2)
     return result.sort_values(["Start", "Vessel", "VoyageId"], ascending=[False, True, True]).reset_index(drop=True)
+
+
+def apply_cargo_overview_excel_formats(worksheet: Any, overview: pd.DataFrame) -> None:
+    """Keep voyage export values numeric and display thousands with up to 2 decimals."""
+    column_positions = {str(name): idx + 1 for idx, name in enumerate(overview.columns)}
+    for column in VOYAGE_OVERVIEW_NUMERIC_COLUMNS:
+        col_idx = column_positions.get(column)
+        if not col_idx:
+            continue
+        for row_idx in range(2, worksheet.max_row + 1):
+            cell = worksheet.cell(row=row_idx, column=col_idx)
+            if cell.value is not None:
+                cell.number_format = '#,##0.##'
+    for column in ["Start", "End"]:
+        col_idx = column_positions.get(column)
+        if not col_idx:
+            continue
+        for row_idx in range(2, worksheet.max_row + 1):
+            cell = worksheet.cell(row=row_idx, column=col_idx)
+            if cell.value is not None:
+                cell.number_format = 'dd/mm/yyyy hh:mm'
 
 
 def cargo_overview_excel_bytes(overview: pd.DataFrame) -> bytes:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         write_table_sheet(writer, overview, "Voyage Overview", "CargoVoyageOverview")
+        apply_cargo_overview_excel_formats(writer.sheets["Voyage Overview"], overview)
     return output.getvalue()
 
 
@@ -8617,7 +8676,25 @@ def render_cargo_voyages_workspace(
             unsafe_allow_html=True,
         )
         st.caption("One row per voyage. Use the existing sidebar Fleet group / Vessel / Period controls to scale from one vessel to the whole selected fleet.")
-        render_preview_table(overview)
+        overview_display = overview.copy()
+        overview_display["VoyageId"] = overview_display["VoyageId"].astype("string").fillna("-").str.strip().replace("", "-")
+        st.dataframe(
+            overview_display,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "VoyageId": st.column_config.TextColumn("VoyageId", width="small"),
+                "Start": st.column_config.DatetimeColumn("Start", format="DD/MM/YYYY HH:mm"),
+                "End": st.column_config.DatetimeColumn("End", format="DD/MM/YYYY HH:mm"),
+                "Duration [days]": st.column_config.NumberColumn("Duration [days]", format="%.2f"),
+                "Cargo [MT]": st.column_config.NumberColumn("Cargo [MT]", format="%.2f"),
+                "Cargo TEU": st.column_config.NumberColumn("Cargo TEU", format="%.2f"),
+                "Total Fuel Consumption [MT]": st.column_config.NumberColumn("Total Fuel Consumption [MT]", format="%.2f"),
+                "Total MGO Consumption [MT]": st.column_config.NumberColumn("Total MGO Consumption [MT]", format="%.2f"),
+                "Total HFO Consumption [MT]": st.column_config.NumberColumn("Total HFO Consumption [MT]", format="%.2f"),
+                "Total LFO Consumption [MT]": st.column_config.NumberColumn("Total LFO Consumption [MT]", format="%.2f"),
+            },
+        )
 
         overview_signature = sha256(
             f"{tuple(selected_vessels)}|{selected_start}|{selected_end}|{len(overview)}|{overview['Start'].max()}".encode("utf-8")
@@ -8654,7 +8731,7 @@ def render_cargo_voyages_workspace(
         "Voyage",
         options=vessel_overview.index.tolist(),
         format_func=lambda idx: (
-            f"{vessel_overview.loc[idx, 'Voyage']} | "
+            f"{vessel_overview.loc[idx, 'VoyageId']} | "
             f"{pd.to_datetime(vessel_overview.loc[idx, 'Start'], errors='coerce', utc=True).strftime('%d/%m/%Y %H:%M')} → "
             f"{pd.to_datetime(vessel_overview.loc[idx, 'End'], errors='coerce', utc=True).strftime('%d/%m/%Y %H:%M')}"
         ),
