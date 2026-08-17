@@ -8595,7 +8595,7 @@ def apply_cargo_overview_excel_formats(worksheet: Any, overview: pd.DataFrame) -
         for row_idx in range(2, worksheet.max_row + 1):
             cell = worksheet.cell(row=row_idx, column=col_idx)
             if cell.value is not None:
-                cell.number_format = '#,##0.##'
+                cell.number_format = '#,##0.00'
     for column in ["Start", "End"]:
         col_idx = column_positions.get(column)
         if not col_idx:
