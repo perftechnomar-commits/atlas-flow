@@ -2683,6 +2683,10 @@ METRIC_ICON_SVGS = {
     "checked_columns": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 4v16M15 4v16M7.2 12.2l1.9 1.9 3.8-4.4"></path></svg>',
     "database_rows": '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path><path d="M8 9h8M8 15h8"></path></svg>',
     "columns_plus": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="13" height="16" rx="2"></rect><path d="M7.3 4v16M11.7 4v16M18 9v8M14 13h8"></path></svg>',
+    "vessel": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14h16l-2.2 4.1a3 3 0 0 1-2.6 1.6H8.8a3 3 0 0 1-2.6-1.6L4 14Z"></path><path d="M8 14V9h8v5M12 9V4l3 2.2V9M3.5 21c1.2 0 1.8-.8 3-.8s1.8.8 3 .8 1.8-.8 3-.8 1.8.8 3 .8 1.8-.8 3-.8 1.8.8 3 .8"></path></svg>',
+    "api_sources": '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="5.5" ry="2.2"></ellipse><path d="M6.5 5v5.2c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2V5M6.5 10.2v4.1c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2v-4.1"></path><path d="M4 18.5h3M17 18.5h3M6 16.5v4M18 16.5v4"></path></svg>',
+    "report_rows": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h8l4 4v14H7Z"></path><path d="M15 3v5h4M10 12h6M10 16h6M4 8h3M4 12h3M4 16h3"></path></svg>',
+    "time_series_rows": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 10h18M8 5v14M13 13.5l2.5 1.5V11"></path><circle cx="13" cy="13" r="3.5"></circle></svg>',
     "cargo_weight": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7a3 3 0 0 1 6 0"></path><path d="M7 7h10l2 4v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7l2-4Z"></path><path d="M8.5 13h7M10 16h4"></path></svg>',
     "cargo_teu": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="7" width="17" height="10" rx="1.6"></rect><path d="M7 7v10M10.5 7v10M14 7v10M17.5 7v10M6 20h12M8 4h8"></path></svg>',
     "voyage_duration": '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="M12 7v5l3.5 2M5.5 5.5l1.8 1.8M18.5 5.5l-1.8 1.8"></path></svg>',
@@ -3148,7 +3152,7 @@ def render_descriptive_statistics_tab(
     sources = {
         "Custom Analytics": custom_df,
         "Noon & Manual Reports": reportpivots_df,
-        "15-Minute Operations": shippivots_df,
+        "High-Frequency": shippivots_df,
     }
     available_sources = [label for label, df in sources.items() if isinstance(df, pd.DataFrame) and not df.empty]
     if not available_sources:
@@ -7680,8 +7684,8 @@ def render_monthly_comparison_workspace(
         [
             ("Available Fields", f"{len(field_options):,}", "columns_plus"),
             ("Selected Fields", f"{len(selected_fields):,}", "checked_columns"),
-            ("Vessels", f"{len(selected_vessels):,}", "table_eye"),
-            ("API Sources", "3", "database_rows"),
+            ("Vessels", f"{len(selected_vessels):,}", "vessel"),
+            ("API Sources", "3", "api_sources"),
         ]
     )
 
@@ -9156,7 +9160,7 @@ def main() -> None:
         "Voyage Analysis",
         "Custom Analytics",
         "Noon & Manual Reports",
-        "15-Minute Operations",
+        "High-Frequency",
         "Descriptive Statistics",
         "Export Center",
         "API Diagnostics",
@@ -9185,13 +9189,13 @@ def main() -> None:
         active_wide_sources.update({"reportpivots", "shippivots"})
     elif workspace == "Noon & Manual Reports":
         active_wide_sources.add("reportpivots")
-    elif workspace == "15-Minute Operations":
+    elif workspace == "High-Frequency":
         active_wide_sources.add("shippivots")
     elif workspace == "Descriptive Statistics":
         descriptive_source_hint = st.session_state.get("atlas_descriptive_source_selector", "Custom Analytics")
         if descriptive_source_hint == "Noon & Manual Reports":
             active_wide_sources.add("reportpivots")
-        elif descriptive_source_hint == "15-Minute Operations":
+        elif descriptive_source_hint == "High-Frequency":
             active_wide_sources.add("shippivots")
     elif workspace == "Export Center":
         # Wide sources are loaded inside the export button only, not during normal render.
@@ -9465,7 +9469,7 @@ def main() -> None:
                 selected_end,
             )
 
-    elif workspace == "15-Minute Operations":
+    elif workspace == "High-Frequency":
         shippivots_df, shippivots_metadata = load_wide_source_for_view(
             "shippivots", username, password, token, auth_method, api_start_date, refresh,
             selected_vessels, selected_start, selected_end
@@ -9475,7 +9479,7 @@ def main() -> None:
             st.code("https://atlas-flow.streamlit.app/?warmup=1&force=1&source=shippivots&token=warmup-atlas-flow", language="text")
         else:
             render_wide_source_tab(
-                "15-Minute Operations",
+                "High-Frequency",
                 shippivots_df,
                 shippivots_metadata,
                 "shippivots",
@@ -9489,7 +9493,7 @@ def main() -> None:
         st.caption("Analyze one source at a time. This avoids loading all large API tables into memory together.")
         selected_source = st.selectbox(
             "Source table",
-            options=["Custom Analytics", "Noon & Manual Reports", "15-Minute Operations"],
+            options=["Custom Analytics", "Noon & Manual Reports", "High-Frequency"],
             key="atlas_descriptive_source_selector",
         )
         if selected_source == "Custom Analytics":
@@ -9556,8 +9560,8 @@ def main() -> None:
         render_metric_cards(
             [
                 ("Custom Analytics Rows", f"{len(output_df):,}", "table_eye"),
-                ("Noon & Manual Rows", "loaded on demand", "database_rows"),
-                ("15-Minute Rows", "loaded on demand", "checked_columns"),
+                ("Noon & Manual Rows", "loaded on demand", "report_rows"),
+                ("High-Frequency Rows", "loaded on demand", "time_series_rows"),
             ]
         )
 
@@ -9632,7 +9636,7 @@ def main() -> None:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         else:
-            st.caption("Run the individual warmups first if the workbook is missing Noon & Manual or 15-Minute sheets.")
+            st.caption("Run the individual warmups first if the workbook is missing Noon & Manual or High-Frequency sheets.")
 
     elif workspace == "API Diagnostics":
         st.markdown('<div class="section-title">Diagnostics</div>', unsafe_allow_html=True)
