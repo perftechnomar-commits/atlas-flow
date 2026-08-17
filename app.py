@@ -8106,6 +8106,41 @@ CARGO_DRAFT_FIELDS = [
     "Ballast Amount [tons]", "Dead Load [tons]", "Air Draft [m]",
 ]
 
+# Voyage fuel totals use the existing compact ReportData fuel-grade fields.
+# The categories intentionally match the operational overview requested by the user:
+# MGO, HFO-family grades, LFO-family grades, and the grand total for the voyage.
+VOYAGE_FUEL_GRADE_COLUMNS = {
+    "MGO": [
+        "Main Engine - MGO", "Diesel Generator - MGO",
+        "Auxiliary Engine - MGO", "Boiler - MGO",
+    ],
+    "HFO": [
+        "Main Engine - HSHFO", "Main Engine - ULSHFO", "Main Engine - VLSHFO",
+        "Diesel Generator - HSHFO", "Diesel Generator - ULSHFO", "Diesel Generator - VLSHFO",
+        "Auxiliary Engine - HSHFO", "Auxiliary Engine - ULSHFO", "Auxiliary Engine - VLSHFO",
+        "Boiler - HSHFO", "Boiler - ULSHFO", "Boiler - VLSHFO",
+    ],
+    "LFO": [
+        "Main Engine - HSLFO", "Main Engine - ULSLFO", "Main Engine - VLSLFO",
+        "Diesel Generator - HSLFO", "Diesel Generator - ULSLFO", "Diesel Generator - VLSLFO",
+        "Auxiliary Engine - HSLFO", "Auxiliary Engine - ULSLFO", "Auxiliary Engine - VLSLFO",
+        "Boiler - HSLFO", "Boiler - ULSLFO", "Boiler - VLSLFO",
+    ],
+}
+VOYAGE_FUEL_CANONICAL_COLUMNS = sorted(
+    {column for columns in VOYAGE_FUEL_GRADE_COLUMNS.values() for column in columns},
+    key=str.casefold,
+)
+VOYAGE_FUEL_ALIAS_TO_CANONICAL = {
+    normalize_text(alias): canonical
+    for canonical in VOYAGE_FUEL_CANONICAL_COLUMNS
+    for alias in PERFORMANCE_KPI_VALUE_ALIASES.get(canonical, [canonical])
+}
+VOYAGE_FUEL_VALUE_KEYS = set(VOYAGE_FUEL_ALIAS_TO_CANONICAL) | {
+    normalize_text(alias)
+    for alias in PERFORMANCE_KPI_VALUE_ALIASES.get("Total Fuel Consumed", ["Total Fuel Consumed"])
+}
+
 
 def cargo_value_keys() -> set[str]:
     return {
@@ -8139,6 +8174,123 @@ def cargo_latest_value(df: pd.DataFrame, column: str | None) -> Any:
     values = df[column]
     nonempty = values[values.notna() & values.astype("string").str.strip().ne("")]
     return nonempty.iloc[-1] if not nonempty.empty else pd.NA
+
+
+def cargo_first_value(df: pd.DataFrame, column: str | None) -> Any:
+    if not column or column not in df.columns or df.empty:
+        return pd.NA
+    values = df[column]
+    nonempty = values[values.notna() & values.astype("string").str.strip().ne("")]
+    return nonempty.iloc[0] if not nonempty.empty else pd.NA
+
+
+def cargo_departure_value(
+    df: pd.DataFrame,
+    column: str | None,
+    voyage_start: pd.Timestamp,
+    voyage_end: pd.Timestamp,
+    *,
+    datetime_column: str = "DateTime",
+    pre_departure_hours: int = 6,
+) -> Any:
+    """Return the cargo condition carried at voyage departure.
+
+    Prefer the latest valid value shortly before the ShipPivots VoyageId starts.
+    This captures departure reports that can be stamped a few minutes before the
+    first 15-minute VoyageId point. If none exists, use the first valid value
+    inside the voyage. Never use a record after the voyage end.
+    """
+    if not column or column not in df.columns or datetime_column not in df.columns or df.empty:
+        return pd.NA
+    work = df[[datetime_column, column]].copy()
+    work[datetime_column] = pd.to_datetime(work[datetime_column], errors="coerce", utc=True)
+    work = work[work[datetime_column].notna() & work[datetime_column].le(voyage_end)].sort_values(datetime_column)
+    valid = work[column].notna() & work[column].astype("string").str.strip().ne("")
+    work = work.loc[valid]
+    if work.empty:
+        return pd.NA
+    pre_start = voyage_start - pd.Timedelta(hours=pre_departure_hours)
+    before = work[work[datetime_column].ge(pre_start) & work[datetime_column].le(voyage_start)]
+    if not before.empty:
+        return before.iloc[-1][column]
+    inside = work[work[datetime_column].gt(voyage_start) & work[datetime_column].le(voyage_end)]
+    return inside.iloc[0][column] if not inside.empty else pd.NA
+
+
+def report_event_time(df: pd.DataFrame) -> pd.Series:
+    end_values = pd.to_datetime(df.get("EndDateTimeGMT"), errors="coerce", utc=True)
+    start_values = pd.to_datetime(df.get("StartDateTimeGMT"), errors="coerce", utc=True)
+    return end_values.fillna(start_values)
+
+
+def fuel_reportdata_selected(long_df: pd.DataFrame, selected_vessels: list[str]) -> pd.DataFrame:
+    if long_df.empty or "ValueDescription" not in long_df.columns or "ShipName" not in long_df.columns:
+        return pd.DataFrame(columns=CARGO_REPORT_IDENTITY_COLUMNS)
+    keys = long_df["ValueDescription"].map(normalize_text)
+    mask = match_selected_vessels(long_df["ShipName"], selected_vessels) & keys.isin(VOYAGE_FUEL_VALUE_KEYS)
+    return long_df.loc[mask].copy()
+
+
+def pivot_fuel_reports(fuel_long: pd.DataFrame) -> pd.DataFrame:
+    if fuel_long.empty:
+        return pd.DataFrame(columns=[*CARGO_REPORT_IDENTITY_COLUMNS, "MGO Consumption [MT]", "HFO Consumption [MT]", "LFO Consumption [MT]", "Total Fuel Consumption [MT]"])
+    work = fuel_long.copy()
+    work["_key"] = work["ValueDescription"].map(normalize_text)
+    total_fuel_keys = {normalize_text(alias) for alias in PERFORMANCE_KPI_VALUE_ALIASES.get("Total Fuel Consumed", ["Total Fuel Consumed"])}
+    work["_canonical"] = work["_key"].map(VOYAGE_FUEL_ALIAS_TO_CANONICAL)
+    work.loc[work["_key"].isin(total_fuel_keys), "_canonical"] = "Total Fuel Consumed"
+    work = work[work["_canonical"].notna()].copy()
+    if work.empty:
+        return pd.DataFrame(columns=[*CARGO_REPORT_IDENTITY_COLUMNS, "MGO Consumption [MT]", "HFO Consumption [MT]", "LFO Consumption [MT]", "Total Fuel Consumption [MT]"])
+    work["_value"] = pd.to_numeric(work["ParsedValue"], errors="coerce")
+    work["_source_order"] = range(len(work))
+    work = work.sort_values("_source_order").drop_duplicates(
+        [*CARGO_REPORT_IDENTITY_COLUMNS, "_canonical"], keep="last"
+    )
+    pivot = work.pivot(index=CARGO_REPORT_IDENTITY_COLUMNS, columns="_canonical", values="_value").reset_index()
+    pivot.columns.name = None
+    for grade, columns in VOYAGE_FUEL_GRADE_COLUMNS.items():
+        present = [column for column in columns if column in pivot.columns]
+        if present:
+            pivot[f"{grade} Consumption [MT]"] = pivot[present].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+        else:
+            pivot[f"{grade} Consumption [MT]"] = pd.NA
+    grade_columns = [f"{grade} Consumption [MT]" for grade in ["MGO", "HFO", "LFO"]]
+    grade_total = pivot[grade_columns].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+    official_total = pd.to_numeric(pivot.get("Total Fuel Consumed"), errors="coerce") if "Total Fuel Consumed" in pivot.columns else pd.Series(pd.NA, index=pivot.index, dtype="Float64")
+    pivot["Total Fuel Consumption [MT]"] = grade_total.fillna(official_total)
+    pivot["StartDateTimeGMT"] = pd.to_datetime(pivot["StartDateTimeGMT"], errors="coerce", utc=True)
+    pivot["EndDateTimeGMT"] = pd.to_datetime(pivot["EndDateTimeGMT"], errors="coerce", utc=True)
+    return pivot.sort_values(["EndDateTimeGMT", "StartDateTimeGMT", "ReportId"], na_position="last").reset_index(drop=True)
+
+
+def fuel_reports_for_voyage(
+    fuel_reports: pd.DataFrame,
+    vessel: str,
+    voyage_start: pd.Timestamp,
+    voyage_end: pd.Timestamp,
+) -> pd.DataFrame:
+    if fuel_reports.empty:
+        return fuel_reports.copy()
+    vessel_df = _cargo_subset_vessel(fuel_reports, vessel)
+    event_time = report_event_time(vessel_df)
+    # Consumption reported at a report belongs to the interval ending at that
+    # report. Use only reports completing after voyage start and no later than
+    # voyage end, so the grand total is restricted to the whole VoyageId span.
+    return vessel_df.loc[event_time.gt(voyage_start) & event_time.le(voyage_end)].copy()
+
+
+def voyage_fuel_totals(fuel_reports_voyage: pd.DataFrame) -> dict[str, Any]:
+    totals: dict[str, Any] = {}
+    for column in ["MGO Consumption [MT]", "HFO Consumption [MT]", "LFO Consumption [MT]"]:
+        values = pd.to_numeric(fuel_reports_voyage.get(column), errors="coerce") if column in fuel_reports_voyage.columns else pd.Series(dtype="float64")
+        totals[column] = values.sum(min_count=1) if not values.empty else pd.NA
+    grade_values = pd.Series([totals[column] for column in ["MGO Consumption [MT]", "HFO Consumption [MT]", "LFO Consumption [MT]"]], dtype="Float64")
+    total = grade_values.sum(min_count=1)
+    if pd.isna(total) and "Total Fuel Consumption [MT]" in fuel_reports_voyage.columns:
+        total = pd.to_numeric(fuel_reports_voyage["Total Fuel Consumption [MT]"], errors="coerce").sum(min_count=1)
+    totals["Total Fuel Consumption [MT]"] = total
+    return totals
 
 
 def cargo_format_number(value: Any, decimals: int = 1) -> str:
@@ -8195,10 +8347,13 @@ def cargo_reportdata_for_voyage(
     vessel_mask = match_selected_vessels(long_df["ShipName"], [vessel])
     start_values = pd.to_datetime(long_df["StartDateTimeGMT"], errors="coerce", utc=True)
     end_values = pd.to_datetime(long_df["EndDateTimeGMT"], errors="coerce", utc=True)
+    # A small pre-departure allowance captures departure cargo reports that can
+    # be stamped shortly before ShipPivots switches to the new VoyageId.
+    # Deliberately do not include anything after voyage_end.
     margin = pd.Timedelta(hours=6)
     time_mask = (
-        (start_values.ge(voyage_start - margin) & start_values.le(voyage_end + margin))
-        | (end_values.ge(voyage_start - margin) & end_values.le(voyage_end + margin))
+        (start_values.ge(voyage_start - margin) & start_values.le(voyage_end))
+        | (end_values.ge(voyage_start - margin) & end_values.le(voyage_end))
     )
     keys = long_df["ValueDescription"].map(normalize_text)
     return long_df.loc[vessel_mask & time_mask & keys.isin(cargo_value_keys())].copy()
@@ -8230,8 +8385,7 @@ def filter_reportpivots_for_voyage(
         return reportpivots_df.copy()
     result = reportpivots_df.copy()
     result["DateTime"] = pd.to_datetime(result["DateTime"], errors="coerce", utc=True)
-    margin = pd.Timedelta(hours=6)
-    return result[result["DateTime"].ge(voyage_start - margin) & result["DateTime"].le(voyage_end + margin)].copy().sort_values("DateTime")
+    return result[result["DateTime"].ge(voyage_start) & result["DateTime"].le(voyage_end)].copy().sort_values("DateTime")
 
 
 def cargo_report_timeline(cargo_by_report: pd.DataFrame, rp_voyage: pd.DataFrame) -> pd.DataFrame:
@@ -8268,6 +8422,7 @@ def cargo_excel_bytes(
     cargo_by_report: pd.DataFrame,
     reportpivots: pd.DataFrame,
     shippivots: pd.DataFrame,
+    fuel_by_report: pd.DataFrame | None = None,
 ) -> bytes:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -8276,6 +8431,8 @@ def cargo_excel_bytes(
             write_table_sheet(writer, timeline, "Report Timeline", "CargoReportTimeline")
         if not cargo_by_report.empty:
             write_table_sheet(writer, cargo_by_report, "Cargo By Report", "CargoByReport")
+        if fuel_by_report is not None and not fuel_by_report.empty:
+            write_table_sheet(writer, fuel_by_report, "Fuel By Report", "CargoFuelByReport")
         if not reportpivots.empty:
             write_table_sheet(writer, reportpivots, "ReportPivots", "CargoReportPivots")
         if not shippivots.empty:
@@ -8295,18 +8452,17 @@ def build_cargo_voyage_overview(
     long_df: pd.DataFrame,
     selected_vessels: list[str],
 ) -> pd.DataFrame:
-    """Build one compact row per vessel/voyage for mass review.
+    """Build one compact row per whole VoyageId for mass review.
 
-    Performance note: the old implementation rescanned the complete ReportData
-    snapshot once for *every* voyage.  That became very slow as soon as a vessel
-    had several voyages, and was not viable for fleet/all-vessel overview.
-    This version filters/pivots the selected cargo ReportData only once, then
-    slices that much smaller report table by vessel/voyage interval.
+    ShipPivots defines the voyage boundaries. ReportPivots route values are
+    taken only from inside those boundaries. Cargo condition may use a small
+    pre-departure allowance because the departure cargo report can be stamped
+    minutes before the first VoyageId point. Fuel is summed only from reports
+    whose reporting interval completes inside the voyage.
     """
     if not selected_vessels or ship_df.empty:
         return pd.DataFrame()
 
-    # Parse the two wide sources once, rather than inside every voyage loop.
     ship_work = ship_df.copy()
     if "DateTime" in ship_work.columns:
         ship_work["DateTime"] = pd.to_datetime(ship_work["DateTime"], errors="coerce", utc=True)
@@ -8314,65 +8470,30 @@ def build_cargo_voyage_overview(
     if "DateTime" in rp_work.columns:
         rp_work["DateTime"] = pd.to_datetime(rp_work["DateTime"], errors="coerce", utc=True)
 
-    # Restrict ReportData once to selected vessels + the time span represented by
-    # ShipPivots, then pivot all cargo reports once.  This removes the expensive
-    # normalize/match/pivot pass that previously ran for every voyage.
     cargo_reports_all = pd.DataFrame(columns=CARGO_REPORT_IDENTITY_COLUMNS)
-    if (
-        isinstance(long_df, pd.DataFrame)
-        and not long_df.empty
-        and "ShipName" in long_df.columns
-        and "ValueDescription" in long_df.columns
-    ):
+    if isinstance(long_df, pd.DataFrame) and not long_df.empty and "ShipName" in long_df.columns and "ValueDescription" in long_df.columns:
         vessel_mask = match_selected_vessels(long_df["ShipName"], selected_vessels)
         cargo_key_mask = long_df["ValueDescription"].map(normalize_text).isin(cargo_value_keys())
-
-        time_mask = pd.Series(True, index=long_df.index)
-        if "DateTime" in ship_work.columns and ship_work["DateTime"].notna().any():
-            span_start = ship_work["DateTime"].min() - pd.Timedelta(hours=6)
-            span_end = ship_work["DateTime"].max() + pd.Timedelta(hours=6)
-            rd_start = pd.to_datetime(long_df.get("StartDateTimeGMT"), errors="coerce", utc=True)
-            rd_end = pd.to_datetime(long_df.get("EndDateTimeGMT"), errors="coerce", utc=True)
-            time_mask = (
-                (rd_start.ge(span_start) & rd_start.le(span_end))
-                | (rd_end.ge(span_start) & rd_end.le(span_end))
-            )
-
-        cargo_selected = long_df.loc[vessel_mask & cargo_key_mask & time_mask].copy()
+        cargo_selected = long_df.loc[vessel_mask & cargo_key_mask].copy()
         if not cargo_selected.empty:
             cargo_reports_all = pivot_cargo_reports(cargo_selected)
         del cargo_selected
 
+    fuel_reports_all = pivot_fuel_reports(fuel_reportdata_selected(long_df, selected_vessels))
+
     rows: list[dict[str, Any]] = []
-    margin = pd.Timedelta(hours=6)
+    pre_departure_margin = pd.Timedelta(hours=6)
     for vessel in selected_vessels:
         vessel_ship = _cargo_subset_vessel(ship_work, vessel)
         vessel_rp = _cargo_subset_vessel(rp_work, vessel)
-        vessel_cargo_reports = (
-            _cargo_subset_vessel(cargo_reports_all, vessel)
-            if not cargo_reports_all.empty and "ShipName" in cargo_reports_all.columns
-            else cargo_reports_all.iloc[0:0].copy()
-        )
+        vessel_cargo_reports = _cargo_subset_vessel(cargo_reports_all, vessel) if not cargo_reports_all.empty else cargo_reports_all.copy()
 
         catalog = build_voyage_catalog(vessel_ship)
         if catalog.empty:
             continue
 
-        rp_dates = (
-            pd.to_datetime(vessel_rp["DateTime"], errors="coerce", utc=True)
-            if "DateTime" in vessel_rp.columns
-            else pd.Series(pd.NaT, index=vessel_rp.index, dtype="datetime64[ns, UTC]")
-        )
-        cargo_start_dates = (
-            pd.to_datetime(vessel_cargo_reports["StartDateTimeGMT"], errors="coerce", utc=True)
-            if "StartDateTimeGMT" in vessel_cargo_reports.columns
-            else pd.Series(pd.NaT, index=vessel_cargo_reports.index, dtype="datetime64[ns, UTC]")
-        )
-        cargo_end_dates = (
-            pd.to_datetime(vessel_cargo_reports["EndDateTimeGMT"], errors="coerce", utc=True)
-            if "EndDateTimeGMT" in vessel_cargo_reports.columns
-            else pd.Series(pd.NaT, index=vessel_cargo_reports.index, dtype="datetime64[ns, UTC]")
-        )
+        rp_dates = pd.to_datetime(vessel_rp.get("DateTime"), errors="coerce", utc=True) if "DateTime" in vessel_rp.columns else pd.Series(pd.NaT, index=vessel_rp.index, dtype="datetime64[ns, UTC]")
+        cargo_events = report_event_time(vessel_cargo_reports) if not vessel_cargo_reports.empty else pd.Series(pd.NaT, index=vessel_cargo_reports.index, dtype="datetime64[ns, UTC]")
 
         for _, voyage in catalog.iterrows():
             voyage_id = str(voyage.get("VoyageId", ""))
@@ -8381,48 +8502,50 @@ def build_cargo_voyage_overview(
             if pd.isna(voyage_start) or pd.isna(voyage_end):
                 continue
 
-            rp_voyage = vessel_rp.loc[
-                rp_dates.ge(voyage_start - margin) & rp_dates.le(voyage_end + margin)
-            ].copy()
-            cargo_by_report = vessel_cargo_reports.loc[
-                (cargo_start_dates.ge(voyage_start - margin) & cargo_start_dates.le(voyage_end + margin))
-                | (cargo_end_dates.ge(voyage_start - margin) & cargo_end_dates.le(voyage_end + margin))
-            ].copy()
+            # Strict route window: never allow the next port call/voyage to
+            # overwrite Departure/Arrival for this VoyageId.
+            rp_route = vessel_rp.loc[rp_dates.ge(voyage_start) & rp_dates.le(voyage_end)].copy().sort_values("DateTime")
+            # Cargo condition can legitimately be a few minutes before the first
+            # ShipPivots point, but never after voyage_end.
+            rp_cargo = vessel_rp.loc[rp_dates.ge(voyage_start - pre_departure_margin) & rp_dates.le(voyage_end)].copy().sort_values("DateTime")
+            cargo_by_report = vessel_cargo_reports.loc[cargo_events.ge(voyage_start - pre_departure_margin) & cargo_events.le(voyage_end)].copy()
 
-            cargo_weight_col = cargo_first_column(rp_voyage, ["CargoWeight", "Cargo Weight", "CargoMT"])
-            cargo_teu_col = cargo_first_column(rp_voyage, ["CargoTEU", "Cargo TEU", "TEU"])
-            dep_col = cargo_first_column(rp_voyage, ["DeparturePort", "Departure Port", "PortFrom"])
-            arr_col = cargo_first_column(rp_voyage, ["ArrivalPort", "Arrival Port", "PortTo"])
-            cargo_weight = cargo_latest_value(rp_voyage, cargo_weight_col)
+            cargo_weight_col = cargo_first_column(rp_cargo, ["CargoWeight", "Cargo Weight", "CargoMT"])
+            cargo_teu_col = cargo_first_column(rp_cargo, ["CargoTEU", "Cargo TEU", "TEU"])
+            dep_col = cargo_first_column(rp_route, ["DeparturePort", "Departure Port", "PortFrom"])
+            arr_col = cargo_first_column(rp_route, ["ArrivalPort", "Arrival Port", "PortTo"])
+
+            cargo_weight = cargo_departure_value(rp_cargo, cargo_weight_col, voyage_start, voyage_end)
+            cargo_teu = cargo_departure_value(rp_cargo, cargo_teu_col, voyage_start, voyage_end)
             if pd.isna(pd.to_numeric(pd.Series([cargo_weight]), errors="coerce").iloc[0]) and "Cargo Weight [tons]" in cargo_by_report.columns:
-                cargo_weight = cargo_latest_value(cargo_by_report, "Cargo Weight [tons]")
+                report_times = report_event_time(cargo_by_report)
+                temp = cargo_by_report.copy()
+                temp["_ReportEventTime"] = report_times
+                cargo_weight = cargo_departure_value(temp, "Cargo Weight [tons]", voyage_start, voyage_end, datetime_column="_ReportEventTime")
 
-            def latest_report_value(name: str) -> Any:
-                return cargo_latest_value(cargo_by_report, name) if name in cargo_by_report.columns else pd.NA
+            fuel_voyage = fuel_reports_for_voyage(fuel_reports_all, vessel, voyage_start, voyage_end)
+            fuel_totals = voyage_fuel_totals(fuel_voyage)
 
             rows.append({
                 "Vessel": vessel,
-                "Voyage": voyage_id,
-                "Voyage Internal": voyage.get("VoyageIdInternal"),
+                "VoyageId": voyage_id,
                 "Start": voyage_start,
                 "End": voyage_end,
                 "Duration [days]": max((voyage_end - voyage_start).total_seconds() / 86400.0, 0.0),
-                "Departure": cargo_latest_value(rp_voyage, dep_col),
-                "Arrival": cargo_latest_value(rp_voyage, arr_col),
+                "Departure": cargo_first_value(rp_route, dep_col),
+                "Arrival": cargo_first_value(rp_route, arr_col),
                 "Cargo [MT]": cargo_weight,
-                "Cargo TEU": cargo_latest_value(rp_voyage, cargo_teu_col),
-                "Full Units": latest_report_value("Total Number Full Units (20 and 40ft)"),
-                "Empty Units": latest_report_value("Total Number Empty Units (20 and 40ft)"),
-                "Reefer Units": latest_report_value("Total Number Reefer Units (20 and 40ft)"),
-                "DG Units": latest_report_value("Total Number DG Units (20 and 40ft)"),
-                "Cargo Reports": int(len(cargo_by_report)),
-                "ShipPivots Points": int(voyage.get("Points", 0) or 0),
+                "Cargo TEU": cargo_teu,
+                "Total Fuel Consumption [MT]": fuel_totals["Total Fuel Consumption [MT]"],
+                "Total MGO Consumption [MT]": fuel_totals["MGO Consumption [MT]"],
+                "Total HFO Consumption [MT]": fuel_totals["HFO Consumption [MT]"],
+                "Total LFO Consumption [MT]": fuel_totals["LFO Consumption [MT]"],
             })
 
     if not rows:
         return pd.DataFrame()
     result = pd.DataFrame(rows)
-    return result.sort_values(["Start", "Vessel", "Voyage"], ascending=[False, True, True]).reset_index(drop=True)
+    return result.sort_values(["Start", "Vessel", "VoyageId"], ascending=[False, True, True]).reset_index(drop=True)
 
 
 def cargo_overview_excel_bytes(overview: pd.DataFrame) -> bytes:
@@ -8487,11 +8610,9 @@ def render_cargo_voyages_workspace(
     if mode == "Voyage Overview":
         # Deliberately compact: summary line + mass-data table first.
         vessel_count = int(overview["Vessel"].nunique())
-        report_count = int(pd.to_numeric(overview["Cargo Reports"], errors="coerce").fillna(0).sum())
         st.markdown(
             f'<div class="atlas-pill"><span>Voyages:</span> {len(overview):,} &nbsp; | &nbsp; '
             f'<span>Vessels:</span> {vessel_count:,} &nbsp; | &nbsp; '
-            f'<span>Cargo reports:</span> {report_count:,} &nbsp; | &nbsp; '
             f'<span>Period:</span> {selected_start.strftime("%d/%m/%Y")} → {selected_end.strftime("%d/%m/%Y")}</div>',
             unsafe_allow_html=True,
         )
@@ -8558,23 +8679,30 @@ def render_cargo_voyages_workspace(
 
     cargo_weight_col = cargo_first_column(rp_voyage, ["CargoWeight", "Cargo Weight", "CargoMT"])
     cargo_teu_col = cargo_first_column(rp_voyage, ["CargoTEU", "Cargo TEU", "TEU"])
-    dep_col = cargo_first_column(rp_voyage, ["DeparturePort", "Departure Port", "PortFrom"])
-    arr_col = cargo_first_column(rp_voyage, ["ArrivalPort", "Arrival Port", "PortTo"])
     draft_f_col = cargo_first_column(rp_voyage, ["DraftFore", "Draft Forward"])
     draft_a_col = cargo_first_column(rp_voyage, ["DraftAft", "Draft Aft"])
-    cargo_weight = cargo_latest_value(rp_voyage, cargo_weight_col)
-    if pd.isna(pd.to_numeric(pd.Series([cargo_weight]), errors="coerce").iloc[0]) and "Cargo Weight [tons]" in cargo_by_report.columns:
-        cargo_weight = cargo_latest_value(cargo_by_report, "Cargo Weight [tons]")
-    cargo_teu = cargo_latest_value(rp_voyage, cargo_teu_col)
-    departure_port = cargo_latest_value(rp_voyage, dep_col)
-    arrival_port = cargo_latest_value(rp_voyage, arr_col)
+    cargo_weight = voyage.get("Cargo [MT]")
+    cargo_teu = voyage.get("Cargo TEU")
+    departure_port = voyage.get("Departure")
+    arrival_port = voyage.get("Arrival")
     duration_days = max((voyage_end - voyage_start).total_seconds() / 86400.0, 0.0)
+
+    selected_fuel_long = fuel_reportdata_selected(long_df, [vessel])
+    selected_fuel_reports = pivot_fuel_reports(selected_fuel_long)
+    fuel_voyage = fuel_reports_for_voyage(selected_fuel_reports, vessel, voyage_start, voyage_end)
+    fuel_totals = voyage_fuel_totals(fuel_voyage)
 
     render_metric_cards([
         ("Cargo Weight [MT]", cargo_format_number(cargo_weight, 1), "total"),
         ("Cargo TEU", cargo_format_number(cargo_teu, 1), "columns_plus"),
         ("Voyage Duration", f"{duration_days:,.2f} days", "numeric"),
         ("Reports", f"{len(cargo_by_report):,}", "table_eye"),
+    ])
+    render_metric_cards([
+        ("Total Fuel [MT]", cargo_format_number(fuel_totals["Total Fuel Consumption [MT]"], 2), "total"),
+        ("MGO [MT]", cargo_format_number(fuel_totals["MGO Consumption [MT]"], 2), "numeric"),
+        ("HFO [MT]", cargo_format_number(fuel_totals["HFO Consumption [MT]"], 2), "numeric"),
+        ("LFO [MT]", cargo_format_number(fuel_totals["LFO Consumption [MT]"], 2), "numeric"),
     ])
     st.markdown(
         f'<div class="atlas-pill"><span>Voyage:</span> {escape(voyage_id)} &nbsp; | &nbsp; '
@@ -8614,6 +8742,17 @@ def render_cargo_voyages_workspace(
         if chart_cols:
             st.markdown('<div class="section-title">Cargo evolution</div>', unsafe_allow_html=True)
             st.line_chart(chart_source.dropna(subset=["DateTime"]).set_index("DateTime")[chart_cols])
+
+    st.markdown('<div class="section-title">Fuel consumption by report</div>', unsafe_allow_html=True)
+    if not fuel_voyage.empty:
+        fuel_display_columns = [column for column in [
+            "ReportId", "ReportType", "StartDateTimeGMT", "EndDateTimeGMT", "StateName",
+            "MGO Consumption [MT]", "HFO Consumption [MT]", "LFO Consumption [MT]",
+            "Total Fuel Consumption [MT]",
+        ] if column in fuel_voyage.columns]
+        render_preview_table(fuel_voyage[fuel_display_columns])
+    else:
+        st.info("No fuel-consumption ReportData rows are available inside this voyage interval.")
 
     if not cargo_by_report.empty:
         st.markdown('<div class="section-title">Selected report details</div>', unsafe_allow_html=True)
@@ -8657,6 +8796,10 @@ def render_cargo_voyages_workspace(
         "ShipName": vessel, "VoyageId": voyage_id, "VoyageStart": voyage_start, "VoyageEnd": voyage_end,
         "DurationDays": duration_days, "DeparturePort": departure_port, "ArrivalPort": arrival_port,
         "CargoWeightMT": cargo_weight, "CargoTEU": cargo_teu,
+        "TotalFuelConsumptionMT": fuel_totals["Total Fuel Consumption [MT]"],
+        "TotalMGOConsumptionMT": fuel_totals["MGO Consumption [MT]"],
+        "TotalHFOConsumptionMT": fuel_totals["HFO Consumption [MT]"],
+        "TotalLFOConsumptionMT": fuel_totals["LFO Consumption [MT]"],
         "DraftFore": cargo_latest_value(rp_voyage, draft_f_col), "DraftAft": cargo_latest_value(rp_voyage, draft_a_col),
         "CargoReports": len(cargo_by_report),
     }])
@@ -8664,7 +8807,7 @@ def render_cargo_voyages_workspace(
     cargo_export_ready = st.session_state.get("atlas_cargo_export_signature") == export_signature and "atlas_cargo_export_bytes" in st.session_state
     if st.button("Prepare voyage Excel", type="primary", key="atlas_prepare_cargo_excel"):
         with st.spinner("Preparing voyage workbook..."):
-            st.session_state["atlas_cargo_export_bytes"] = cargo_excel_bytes(detail_overview, timeline, cargo_by_report, rp_voyage, ship_voyage)
+            st.session_state["atlas_cargo_export_bytes"] = cargo_excel_bytes(detail_overview, timeline, cargo_by_report, rp_voyage, ship_voyage, fuel_voyage)
             st.session_state["atlas_cargo_export_signature"] = export_signature
         cargo_export_ready = True
     if cargo_export_ready:
