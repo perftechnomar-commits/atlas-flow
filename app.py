@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from html import escape
 from io import BytesIO
+from numbers import Number
 import gc
 import hmac
 import json
@@ -2820,9 +2821,26 @@ def apply_teal_excel_table_format(worksheet: Any) -> None:
             cell.alignment = Alignment(vertical="center", wrap_text=False)
 
 
+def apply_numeric_excel_number_format(worksheet: Any, df: pd.DataFrame) -> None:
+    """Display true numeric columns with separators and two decimal places."""
+    for column_index, column_name in enumerate(df.columns, start=1):
+        series = df[column_name]
+        if not pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series):
+            continue
+        for row_index in range(2, worksheet.max_row + 1):
+            cell = worksheet.cell(row=row_index, column=column_index)
+            if cell.value is not None:
+                cell.number_format = "#,##0.00"
+
+
 def autofit_excel_columns(worksheet: Any, max_width: int = 48) -> None:
     for column_cells in worksheet.columns:
-        max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+        max_length = max(
+            len(f"{float(cell.value):,.2f}")
+            if isinstance(cell.value, Number) and not isinstance(cell.value, bool) and cell.number_format == "#,##0.00"
+            else len(str(cell.value)) if cell.value is not None else 0
+            for cell in column_cells
+        )
         worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 12), max_width)
 
 
@@ -2831,6 +2849,7 @@ def write_table_sheet(writer: Any, df: pd.DataFrame, sheet_name: str, table_name
     safe_df.to_excel(writer, index=False, sheet_name=sheet_name)
     worksheet = writer.sheets[sheet_name]
     worksheet.freeze_panes = "A2"
+    apply_numeric_excel_number_format(worksheet, safe_df)
     autofit_excel_columns(worksheet)
     add_excel_table(worksheet, table_name)
     apply_teal_excel_table_format(worksheet)
