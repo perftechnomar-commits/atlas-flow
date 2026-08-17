@@ -8738,7 +8738,7 @@ def render_cargo_voyages_workspace(
         key="atlas_cargo_detail_voyage_idx",
     )
     voyage = vessel_overview.loc[detail_idx]
-    voyage_id = str(voyage["Voyage"])
+    voyage_id = str(voyage["VoyageId"])
     voyage_start = pd.to_datetime(voyage["Start"], errors="coerce", utc=True)
     voyage_end = pd.to_datetime(voyage["End"], errors="coerce", utc=True)
 
