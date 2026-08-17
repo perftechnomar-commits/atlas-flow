@@ -2683,6 +2683,12 @@ METRIC_ICON_SVGS = {
     "checked_columns": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 4v16M15 4v16M7.2 12.2l1.9 1.9 3.8-4.4"></path></svg>',
     "database_rows": '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path><path d="M8 9h8M8 15h8"></path></svg>',
     "columns_plus": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="13" height="16" rx="2"></rect><path d="M7.3 4v16M11.7 4v16M18 9v8M14 13h8"></path></svg>',
+    "cargo_weight": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7a3 3 0 0 1 6 0"></path><path d="M7 7h10l2 4v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7l2-4Z"></path><path d="M8.5 13h7M10 16h4"></path></svg>',
+    "cargo_teu": '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="7" width="17" height="10" rx="1.6"></rect><path d="M7 7v10M10.5 7v10M14 7v10M17.5 7v10M6 20h12M8 4h8"></path></svg>',
+    "voyage_duration": '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="M12 7v5l3.5 2M5.5 5.5l1.8 1.8M18.5 5.5l-1.8 1.8"></path></svg>',
+    "report_count": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h8l4 4v14H7Z"></path><path d="M15 3v5h4M10 12h6M10 16h6M4 7h3M4 11h3M4 15h3"></path></svg>',
+    "fuel_total": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h7a2 2 0 0 1 2 2v14H5V6a2 2 0 0 1 2-2Z"></path><path d="M8.5 8h4.5M16 7h2l2 3v7a2 2 0 0 1-2 2h-2M20 10h-2"></path></svg>',
+    "fuel_grade": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3s6 6.1 6 10.4a6 6 0 0 1-12 0C6 9.1 12 3 12 3Z"></path><path d="M9 13.2h6M9.8 16h4.4"></path></svg>',
     "average": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"></path><path d="M7 17V9M12 17V6M17 17v-5"></path><path d="M4 12h16"></path></svg>',
     "total": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5H7l6 7-6 7h10.5"></path></svg>',
     "numeric": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3v8M4 16h6M13 8h4l-4 8h4M20 8v8"></path></svg>',
@@ -8836,16 +8842,16 @@ def render_cargo_voyages_workspace(
     fuel_totals = voyage_fuel_totals(fuel_voyage)
 
     render_metric_cards([
-        ("Cargo Weight [MT]", cargo_format_number(cargo_weight, 1), "total"),
-        ("Cargo TEU", cargo_format_number(cargo_teu, 1), "columns_plus"),
-        ("Voyage Duration", f"{duration_days:,.2f} days", "numeric"),
-        ("Reports", f"{len(cargo_by_report):,}", "table_eye"),
+        ("Cargo Weight [MT]", cargo_format_number(cargo_weight, 1), "cargo_weight"),
+        ("Cargo TEU", cargo_format_number(cargo_teu, 1), "cargo_teu"),
+        ("Voyage Duration", f"{duration_days:,.2f} days", "voyage_duration"),
+        ("Reports", f"{len(cargo_by_report):,}", "report_count"),
     ])
     render_metric_cards([
-        ("Total Fuel [MT]", cargo_format_number(fuel_totals["Total Fuel Consumption [MT]"], 2), "total"),
-        ("MGO [MT]", cargo_format_number(fuel_totals["MGO Consumption [MT]"], 2), "numeric"),
-        ("HFO [MT]", cargo_format_number(fuel_totals["HFO Consumption [MT]"], 2), "numeric"),
-        ("LFO [MT]", cargo_format_number(fuel_totals["LFO Consumption [MT]"], 2), "numeric"),
+        ("Total Fuel [MT]", cargo_format_number(fuel_totals["Total Fuel Consumption [MT]"], 2), "fuel_total"),
+        ("MGO [MT]", cargo_format_number(fuel_totals["MGO Consumption [MT]"], 2), "fuel_grade"),
+        ("HFO [MT]", cargo_format_number(fuel_totals["HFO Consumption [MT]"], 2), "fuel_grade"),
+        ("LFO [MT]", cargo_format_number(fuel_totals["LFO Consumption [MT]"], 2), "fuel_grade"),
     ])
     st.markdown(
         f'<div class="atlas-pill"><span>Voyage:</span> {escape(voyage_id)} &nbsp; | &nbsp; '
