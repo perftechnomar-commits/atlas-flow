@@ -2708,14 +2708,14 @@ def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
     cylo_sloc = safe_divide(pd.Series([cylo_total * 0.93 * 1000]), pd.Series([torque_energy])).iloc[0]
 
     render_metric_cards([
-        ("MELO Consumption", metric_text(melo_total, " ltr"), "fuel_grade"),
-        ("Cylinder Oil Consumption", metric_text(cylo_total, " ltr"), "fuel_grade"),
-        ("GELO Consumption", metric_text(gelo_total, " ltr"), "fuel_grade"),
+        ("MELO Consumption", metric_text(melo_total, " ltr"), "oil_barrel"),
+        ("Cylinder Oil Consumption", metric_text(cylo_total, " ltr"), "oil_barrel"),
+        ("GELO Consumption", metric_text(gelo_total, " ltr"), "oil_barrel"),
     ], "atlas-metric-grid-three")
     render_metric_cards([
-        ("MELO Consumption [ltr/running day]", metric_text(melo_daily, " ltr/day"), "voyage_duration"),
-        ("CYLO SLOC [g/kWh]", metric_text(cylo_sloc, " g/kWh"), "average"),
-        ("GELO Consumption [ltr/DG running day]", metric_text(gelo_daily, " ltr/day"), "voyage_duration"),
+        ("MELO Consumption [ltr/running day]", metric_text(melo_daily, " ltr/day"), "oil_drop"),
+        ("CYLO SLOC [g/kWh]", metric_text(cylo_sloc, " g/kWh"), "oil_drop"),
+        ("GELO Consumption [ltr/DG running day]", metric_text(gelo_daily, " ltr/day"), "oil_drop"),
     ], "atlas-metric-grid-three")
     support_columns = st.columns(3)
     support_columns[0].caption(f"Total MELO: {metric_text(melo_total, ' ltr')} | Running hours: {metric_text(steaming_hours, ' hrs')}")
@@ -3016,6 +3016,8 @@ METRIC_ICON_SVGS = {
     "report_count": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h8l4 4v14H7Z"></path><path d="M15 3v5h4M10 12h6M10 16h6M4 7h3M4 11h3M4 15h3"></path></svg>',
     "fuel_total": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h7a2 2 0 0 1 2 2v14H5V6a2 2 0 0 1 2-2Z"></path><path d="M8.5 8h4.5M16 7h2l2 3v7a2 2 0 0 1-2 2h-2M20 10h-2"></path></svg>',
     "fuel_grade": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3s6 6.1 6 10.4a6 6 0 0 1-12 0C6 9.1 12 3 12 3Z"></path><path d="M9 13.2h6M9.8 16h4.4"></path></svg>',
+    "oil_barrel": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10l1.3 3v12L17 21H7l-1.3-3V6L7 3Z"></path><path d="M5.7 7h12.6M5.7 17h12.6M10 3v18M14 3v18"></path></svg>',
+    "oil_drop": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3s6 6.1 6 10.4a6 6 0 0 1-12 0C6 9.1 12 3 12 3Z"></path></svg>',
     "average": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"></path><path d="M7 17V9M12 17V6M17 17v-5"></path><path d="M4 12h16"></path></svg>',
     "total": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5H7l6 7-6 7h10.5"></path></svg>',
     "numeric": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3v8M4 16h6M13 8h4l-4 8h4M20 8v8"></path></svg>',
