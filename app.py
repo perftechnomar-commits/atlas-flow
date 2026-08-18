@@ -4,7 +4,6 @@ from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from html import escape
 from io import BytesIO
-from numbers import Number
 import gc
 import hmac
 import json
@@ -2812,7 +2811,15 @@ def add_excel_table(worksheet: Any, table_name: str) -> None:
     worksheet.add_table(table)
 
 
-def apply_teal_excel_table_format(worksheet: Any) -> None:
+def numeric_excel_column_indexes(df: pd.DataFrame) -> set[int]:
+    return {
+        index
+        for index, column in enumerate(df.columns, start=1)
+        if pd.api.types.is_numeric_dtype(df[column]) and not pd.api.types.is_bool_dtype(df[column])
+    }
+
+
+def apply_teal_excel_table_format(worksheet: Any, numeric_columns: set[int]) -> None:
     """Apply AtlasFlow teal styling to exported Excel tables."""
     if worksheet.max_row < 1 or worksheet.max_column < 1:
         return
@@ -2831,33 +2838,30 @@ def apply_teal_excel_table_format(worksheet: Any) -> None:
 
     for row_number in range(2, worksheet.max_row + 1):
         fill = even_fill if row_number % 2 == 0 else odd_fill
-        for cell in worksheet[row_number]:
+        for column_index, cell in enumerate(worksheet[row_number], start=1):
             cell.fill = fill
             cell.border = cell_border
             cell.alignment = Alignment(vertical="center", wrap_text=False)
-
-
-def apply_numeric_excel_number_format(worksheet: Any, df: pd.DataFrame) -> None:
-    """Display true numeric columns with separators and two decimal places."""
-    for column_index, column_name in enumerate(df.columns, start=1):
-        series = df[column_name]
-        if not pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series):
-            continue
-        for row_index in range(2, worksheet.max_row + 1):
-            cell = worksheet.cell(row=row_index, column=column_index)
-            if cell.value is not None:
+            if column_index in numeric_columns and cell.value is not None:
                 cell.number_format = "#,##0.00"
 
 
-def autofit_excel_columns(worksheet: Any, max_width: int = 48) -> None:
-    for column_cells in worksheet.columns:
-        max_length = max(
-            len(f"{float(cell.value):,.2f}")
-            if isinstance(cell.value, Number) and not isinstance(cell.value, bool) and cell.number_format == "#,##0.00"
-            else len(str(cell.value)) if cell.value is not None else 0
-            for cell in column_cells
-        )
-        worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 12), max_width)
+def autofit_excel_columns(
+    worksheet: Any,
+    df: pd.DataFrame,
+    numeric_columns: set[int],
+    max_width: int = 48,
+) -> None:
+    for column_index, column_name in enumerate(df.columns, start=1):
+        series = df.iloc[:, column_index - 1]
+        if column_index in numeric_columns:
+            values = pd.to_numeric(series, errors="coerce").dropna()
+            content_width = int(values.map(lambda value: len(f"{float(value):,.2f}")).max()) if not values.empty else 0
+        else:
+            values = series.dropna().astype(str)
+            content_width = int(values.str.len().max()) if not values.empty else 0
+        column_width = max(len(str(column_name)), content_width)
+        worksheet.column_dimensions[get_column_letter(column_index)].width = min(max(column_width + 2, 12), max_width)
 
 
 def write_table_sheet(writer: Any, df: pd.DataFrame, sheet_name: str, table_name: str) -> None:
@@ -2865,10 +2869,10 @@ def write_table_sheet(writer: Any, df: pd.DataFrame, sheet_name: str, table_name
     safe_df.to_excel(writer, index=False, sheet_name=sheet_name)
     worksheet = writer.sheets[sheet_name]
     worksheet.freeze_panes = "A2"
-    apply_numeric_excel_number_format(worksheet, safe_df)
-    autofit_excel_columns(worksheet)
+    numeric_columns = numeric_excel_column_indexes(safe_df)
+    autofit_excel_columns(worksheet, safe_df, numeric_columns)
     add_excel_table(worksheet, table_name)
-    apply_teal_excel_table_format(worksheet)
+    apply_teal_excel_table_format(worksheet, numeric_columns)
 
 
 def to_excel_bytes(clean_df: pd.DataFrame, pivot_analysis_df: pd.DataFrame | None = None) -> bytes:
@@ -6603,6 +6607,23 @@ def load_wide_source_for_view(
         if source_key == "shippivots"
         else ATLAS_REPORTPIVOTS_INTERACTIVE_ROW_LIMIT
     )
+    view_signature = (
+        manifest.get("generation"),
+        tuple(sorted((str(vessel) for vessel in (selected_vessels or [])), key=str.casefold)),
+        selected_start.isoformat(),
+        selected_end.isoformat(),
+        row_limit,
+    )
+    cached_frame = st.session_state.get(f"loaded_{source_key}_df")
+    cached_metadata = st.session_state.get(f"loaded_{source_key}_metadata")
+    if (
+        not refresh
+        and st.session_state.get(f"loaded_{source_key}_signature") == view_signature
+        and isinstance(cached_frame, pd.DataFrame)
+        and isinstance(cached_metadata, dict)
+    ):
+        return cached_frame, dict(cached_metadata)
+
     frame, matching_rows, truncated = read_partitioned_source_slice(
         source_key,
         manifest,
@@ -6622,6 +6643,9 @@ def load_wide_source_for_view(
     metadata["view_rows_loaded"] = int(len(frame))
     metadata["view_truncated"] = bool(truncated)
     metadata["interactive_row_limit"] = int(row_limit)
+    st.session_state[f"loaded_{source_key}_df"] = frame
+    st.session_state[f"loaded_{source_key}_metadata"] = metadata
+    st.session_state[f"loaded_{source_key}_signature"] = view_signature
     return frame, metadata
 
 
@@ -8763,7 +8787,23 @@ def render_cargo_voyages_workspace(
         st.info("Voyage Analysis needs prepared snapshots for: " + ", ".join(missing) + ". Run the AtlasFlow warmup first.")
         return
 
-    overview = build_cargo_voyage_overview(ship_df, rp_df, long_df, selected_vessels)
+    overview_cache_signature = sha256(
+        (
+            f"{ship_meta.get('snapshot_generation')}|{rp_meta.get('snapshot_generation')}|"
+            f"{reportdata_metadata.get('snapshot_generation')}|{tuple(selected_vessels)}|"
+            f"{selected_start.isoformat()}|{selected_end.isoformat()}"
+        ).encode("utf-8")
+    ).hexdigest()
+    cached_overview = st.session_state.get("atlas_cargo_overview_cache")
+    if (
+        st.session_state.get("atlas_cargo_overview_cache_signature") == overview_cache_signature
+        and isinstance(cached_overview, pd.DataFrame)
+    ):
+        overview = cached_overview
+    else:
+        overview = build_cargo_voyage_overview(ship_df, rp_df, long_df, selected_vessels)
+        st.session_state["atlas_cargo_overview_cache"] = overview
+        st.session_state["atlas_cargo_overview_cache_signature"] = overview_cache_signature
     mode_options = ["Voyage Overview", "Voyage Detail"]
     mode = render_text_tab_bar(
         mode_options,
@@ -8853,17 +8893,45 @@ def render_cargo_voyages_workspace(
     voyage_start = pd.to_datetime(voyage["Start"], errors="coerce", utc=True)
     voyage_end = pd.to_datetime(voyage["End"], errors="coerce", utc=True)
 
-    vessel_ship = _cargo_subset_vessel(ship_df, vessel)
-    vessel_rp = _cargo_subset_vessel(rp_df, vessel)
-    ship_work = vessel_ship.copy()
-    ship_work["DateTime"] = pd.to_datetime(ship_work["DateTime"], errors="coerce", utc=True)
-    ship_voyage = ship_work[
-        ship_work.get("VoyageId", pd.Series(index=ship_work.index, dtype="string")).astype("string").eq(voyage_id)
-    ].copy().sort_values("DateTime")
-    rp_voyage = filter_reportpivots_for_voyage(vessel_rp, voyage_start, voyage_end)
-    cargo_long = cargo_reportdata_for_voyage(long_df, vessel, voyage_start, voyage_end)
-    cargo_by_report = pivot_cargo_reports(cargo_long)
-    timeline = cargo_report_timeline(cargo_by_report, rp_voyage)
+    detail_cache_signature = sha256(
+        f"{overview_cache_signature}|{vessel}|{voyage_id}|{voyage_start}|{voyage_end}".encode("utf-8")
+    ).hexdigest()
+    cached_detail = st.session_state.get("atlas_cargo_detail_cache")
+    if (
+        st.session_state.get("atlas_cargo_detail_cache_signature") == detail_cache_signature
+        and isinstance(cached_detail, dict)
+    ):
+        ship_voyage = cached_detail["ship_voyage"]
+        rp_voyage = cached_detail["rp_voyage"]
+        cargo_by_report = cached_detail["cargo_by_report"]
+        timeline = cached_detail["timeline"]
+        fuel_voyage = cached_detail["fuel_voyage"]
+        fuel_totals = cached_detail["fuel_totals"]
+    else:
+        vessel_ship = _cargo_subset_vessel(ship_df, vessel)
+        vessel_rp = _cargo_subset_vessel(rp_df, vessel)
+        ship_work = vessel_ship.copy()
+        ship_work["DateTime"] = pd.to_datetime(ship_work["DateTime"], errors="coerce", utc=True)
+        ship_voyage = ship_work[
+            ship_work.get("VoyageId", pd.Series(index=ship_work.index, dtype="string")).astype("string").eq(voyage_id)
+        ].copy().sort_values("DateTime")
+        rp_voyage = filter_reportpivots_for_voyage(vessel_rp, voyage_start, voyage_end)
+        cargo_long = cargo_reportdata_for_voyage(long_df, vessel, voyage_start, voyage_end)
+        cargo_by_report = pivot_cargo_reports(cargo_long)
+        timeline = cargo_report_timeline(cargo_by_report, rp_voyage)
+        selected_fuel_long = fuel_reportdata_selected(long_df, [vessel])
+        selected_fuel_reports = pivot_fuel_reports(selected_fuel_long)
+        fuel_voyage = fuel_reports_for_voyage(selected_fuel_reports, vessel, voyage_start, voyage_end)
+        fuel_totals = voyage_fuel_totals(fuel_voyage)
+        st.session_state["atlas_cargo_detail_cache"] = {
+            "ship_voyage": ship_voyage,
+            "rp_voyage": rp_voyage,
+            "cargo_by_report": cargo_by_report,
+            "timeline": timeline,
+            "fuel_voyage": fuel_voyage,
+            "fuel_totals": fuel_totals,
+        }
+        st.session_state["atlas_cargo_detail_cache_signature"] = detail_cache_signature
 
     cargo_weight_col = cargo_first_column(rp_voyage, ["CargoWeight", "Cargo Weight", "CargoMT"])
     cargo_teu_col = cargo_first_column(rp_voyage, ["CargoTEU", "Cargo TEU", "TEU"])
@@ -8874,11 +8942,6 @@ def render_cargo_voyages_workspace(
     departure_port = voyage.get("Departure")
     arrival_port = voyage.get("Arrival")
     duration_days = max((voyage_end - voyage_start).total_seconds() / 86400.0, 0.0)
-
-    selected_fuel_long = fuel_reportdata_selected(long_df, [vessel])
-    selected_fuel_reports = pivot_fuel_reports(selected_fuel_long)
-    fuel_voyage = fuel_reports_for_voyage(selected_fuel_reports, vessel, voyage_start, voyage_end)
-    fuel_totals = voyage_fuel_totals(fuel_voyage)
 
     render_metric_cards([
         ("Cargo Weight [MT]", cargo_format_number(cargo_weight, 1), "cargo_weight"),
