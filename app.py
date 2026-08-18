@@ -2579,6 +2579,86 @@ def add_performance_calculations(pivot_df: pd.DataFrame, source_table: pd.DataFr
     return df
 
 
+def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
+    """Present AtlasFlow's existing ROB-based oil calculations as an oil workflow."""
+    st.markdown('<div class="section-title">Lubricating Oil Analysis</div>', unsafe_allow_html=True)
+    st.caption("Consumption is calculated from ROB movement and received quantities for the selected vessels and period.")
+
+    oil_df = build_pivot_table(filtered_long_df, tuple())
+    if oil_df.empty:
+        st.info("No report data is available for the current vessel and date selection.")
+        return
+
+    def metric_text(value: Any, suffix: str) -> str:
+        numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        return "-" if pd.isna(numeric) else f"{float(numeric):,.2f}{suffix}"
+
+    consumption_columns = [
+        "MELO Consumption Total [ltr]",
+        "CYLO Consumption Total [ltr]",
+        "GELO Consumption Total [ltr]",
+    ]
+    for column in consumption_columns:
+        if column not in oil_df.columns:
+            oil_df[column] = pd.NA
+
+    steaming_hours = pd.to_numeric(oil_df.get("Steaming Time Since Last Report [hh:mm]"), errors="coerce").sum(min_count=1)
+    dg_hours = pd.to_numeric(oil_df.get("Total DG Running Hours [hh:mm]"), errors="coerce").sum(min_count=1)
+    melo_total = pd.to_numeric(oil_df["MELO Consumption Total [ltr]"], errors="coerce").sum(min_count=1)
+    cylo_total = pd.to_numeric(oil_df["CYLO Consumption Total [ltr]"], errors="coerce").sum(min_count=1)
+    gelo_total = pd.to_numeric(oil_df["GELO Consumption Total [ltr]"], errors="coerce").sum(min_count=1)
+    melo_daily = safe_divide(pd.Series([melo_total * 24]), pd.Series([steaming_hours])).iloc[0]
+    gelo_daily = safe_divide(pd.Series([gelo_total * 24]), pd.Series([dg_hours])).iloc[0]
+
+    render_metric_cards([
+        ("MELO Consumption", metric_text(melo_total, " ltr"), "fuel_grade"),
+        ("MELO per Running Day", metric_text(melo_daily, " ltr/day"), "voyage_duration"),
+        ("Cylinder Oil Consumption", metric_text(cylo_total, " ltr"), "fuel_grade"),
+        ("GELO per DG Running Day", metric_text(gelo_daily, " ltr/day"), "fuel_grade"),
+    ])
+
+    work = oil_df.copy()
+    work["EndDateTimeGMT"] = pd.to_datetime(work.get("EndDateTimeGMT"), errors="coerce", utc=True)
+    work["Month"] = work["EndDateTimeGMT"].dt.tz_localize(None).dt.to_period("M").astype("string")
+    monthly = work.dropna(subset=["Month"]).groupby("Month", as_index=False)[consumption_columns].sum(min_count=1)
+    vessel_summary = work.groupby("ShipName", as_index=False)[consumption_columns].sum(min_count=1)
+
+    chart_left, chart_right = st.columns(2)
+    with chart_left:
+        st.markdown('<div class="section-title">Consumption by Month</div>', unsafe_allow_html=True)
+        if not monthly.empty:
+            st.line_chart(monthly.set_index("Month"), use_container_width=True)
+    with chart_right:
+        st.markdown('<div class="section-title">Consumption by Vessel</div>', unsafe_allow_html=True)
+        if not vessel_summary.empty:
+            st.bar_chart(vessel_summary.set_index("ShipName"), use_container_width=True)
+
+    st.markdown('<div class="section-title">Vessel Comparison</div>', unsafe_allow_html=True)
+    st.dataframe(format_display_dataframe(vessel_summary), use_container_width=True, hide_index=True)
+
+    detail_columns = [column for column in [
+        "ShipName", "EndDateTimeGMT", "ReportId", "ReportType", "StateName",
+        "MELO ROB [ltr]", "MELO Received [ltr]", "MELO Consumption Total [ltr]",
+        "Cylinder Oil 1 ROB [ltr]", "Cylinder Oil 1 Received [ltr]",
+        "Cylinder Oil 2 ROB [ltr]", "Cylinder Oil 2 Received [ltr]", "CYLO Consumption Total [ltr]",
+        "GELO ROB [ltr]", "GELO Received [ltr]", "GELO Consumption Total [ltr]",
+        "Steaming Time Since Last Report [hh:mm]", "Total DG Running Hours [hh:mm]",
+    ] if column in work.columns]
+    detail_df = work[detail_columns].sort_values("EndDateTimeGMT", ascending=False) if detail_columns else work
+    st.markdown('<div class="section-title">Report-Level Oil Detail</div>', unsafe_allow_html=True)
+    st.dataframe(format_display_dataframe(detail_df.head(TABLE_PREVIEW_ROW_LIMIT)), use_container_width=True, hide_index=True)
+
+    export_signature = sha256(f"{len(detail_df)}|{detail_df.get('EndDateTimeGMT', pd.Series(dtype='object')).max()}".encode("utf-8")).hexdigest()
+    if st.session_state.get("atlas_lub_oil_export_signature") != export_signature:
+        st.session_state.pop("atlas_lub_oil_export_bytes", None)
+    if st.button("Prepare lubricating oil Excel", type="primary"):
+        with st.spinner("Preparing lubricating oil Excel..."):
+            st.session_state["atlas_lub_oil_export_bytes"] = to_excel_bytes(detail_df)
+            st.session_state["atlas_lub_oil_export_signature"] = export_signature
+    if st.session_state.get("atlas_lub_oil_export_signature") == export_signature and "atlas_lub_oil_export_bytes" in st.session_state:
+        st.download_button("Download lubricating oil Excel", st.session_state["atlas_lub_oil_export_bytes"], "atlasflow_lubricating_oil.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 @st.cache_data(show_spinner=False)
 def build_pivot_table(filtered_long_df: pd.DataFrame, selected_variables: tuple[str, ...]) -> pd.DataFrame:
     if filtered_long_df.empty:
@@ -9331,6 +9411,7 @@ def main() -> None:
     workspace_options = [
         "Monthly Comparison",
         "Voyage Analysis",
+        "Lubricating Oil Analysis",
         "Custom Analytics",
         "Noon & Manual Reports",
         "High-Frequency",
@@ -9381,7 +9462,7 @@ def main() -> None:
             "The loaded dataset may be incomplete. Check API Diagnostics before using the export."
         )
 
-    if workspace in {"Monthly Comparison", "Voyage Analysis"}:
+    if workspace in {"Monthly Comparison", "Voyage Analysis", "Lubricating Oil Analysis"}:
         # Monthly Comparison reads pre-aggregated summaries. Voyage Analysis
         # builds its own voyage/report views directly from the prepared sources.
         # does not need to build the report-level pivot or its filter controls.
@@ -9467,6 +9548,9 @@ def main() -> None:
             selected_start,
             selected_end,
         )
+
+    elif workspace == "Lubricating Oil Analysis":
+        render_lubricating_oil_workspace(filtered_long_for_options)
 
     elif workspace == "Custom Analytics":
         st.markdown('<div class="section-title">Custom Analytics Preview & Export</div>', unsafe_allow_html=True)
