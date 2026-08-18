@@ -1171,6 +1171,7 @@ def apply_custom_css() -> None:
             gap: 1.35rem;
             margin: 0 0 0.4rem 0;
         }
+        .atlas-metric-grid-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
         .atlas-metric-card {
             display: grid;
@@ -1381,11 +1382,11 @@ def apply_custom_css() -> None:
         }
 
         @media (max-width: 1100px) {
-            .atlas-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .atlas-metric-grid, .atlas-metric-grid-three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
         @media (max-width: 640px) {
-            .atlas-metric-grid { grid-template-columns: 1fr; }
+            .atlas-metric-grid, .atlas-metric-grid-three { grid-template-columns: 1fr; }
             .dashboard-title { font-size: 2.55rem !important; }
             .dashboard-hero { min-height: 150px !important; }
         }
@@ -2609,13 +2610,25 @@ def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
     gelo_total = pd.to_numeric(oil_df["GELO Consumption Total [ltr]"], errors="coerce").sum(min_count=1)
     melo_daily = safe_divide(pd.Series([melo_total * 24]), pd.Series([steaming_hours])).iloc[0]
     gelo_daily = safe_divide(pd.Series([gelo_total * 24]), pd.Series([dg_hours])).iloc[0]
+    power_values = pd.to_numeric(oil_df["Power from Torque Meter [kW]"], errors="coerce") if "Power from Torque Meter [kW]" in oil_df.columns else pd.Series(pd.NA, index=oil_df.index, dtype="Float64")
+    lap_values = pd.to_numeric(oil_df["LapTime"], errors="coerce") if "LapTime" in oil_df.columns else pd.Series(pd.NA, index=oil_df.index, dtype="Float64")
+    torque_energy = (power_values * lap_values).sum(min_count=1)
+    cylo_sloc = safe_divide(pd.Series([cylo_total * 0.93 * 1000]), pd.Series([torque_energy])).iloc[0]
 
     render_metric_cards([
         ("MELO Consumption", metric_text(melo_total, " ltr"), "fuel_grade"),
-        ("MELO per Running Day", metric_text(melo_daily, " ltr/day"), "voyage_duration"),
         ("Cylinder Oil Consumption", metric_text(cylo_total, " ltr"), "fuel_grade"),
-        ("GELO per DG Running Day", metric_text(gelo_daily, " ltr/day"), "fuel_grade"),
-    ])
+        ("GELO Consumption", metric_text(gelo_total, " ltr"), "fuel_grade"),
+    ], "atlas-metric-grid-three")
+    render_metric_cards([
+        ("MELO Consumption [ltr/running day]", metric_text(melo_daily, " ltr/day"), "voyage_duration"),
+        ("CYLO SLOC [g/kWh]", metric_text(cylo_sloc, " g/kWh"), "average"),
+        ("GELO Consumption [ltr/DG running day]", metric_text(gelo_daily, " ltr/day"), "voyage_duration"),
+    ], "atlas-metric-grid-three")
+    support_columns = st.columns(3)
+    support_columns[0].caption(f"Total MELO: {metric_text(melo_total, ' ltr')} | Running hours: {metric_text(steaming_hours, ' hrs')}")
+    support_columns[1].caption(f"Total CYLO: {metric_text(cylo_total, ' ltr')} | Torque energy: {metric_text(torque_energy, ' kWh')}")
+    support_columns[2].caption(f"Total GELO: {metric_text(gelo_total, ' ltr')} | DG running hours: {metric_text(dg_hours, ' hrs')}")
 
     work = oil_df.copy()
     work["EndDateTimeGMT"] = pd.to_datetime(work.get("EndDateTimeGMT"), errors="coerce", utc=True)
@@ -2786,7 +2799,7 @@ METRIC_ICON_SVGS = {
     "nodes": '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4" r="2.5"></circle><circle cx="5" cy="19" r="2.5"></circle><circle cx="19" cy="19" r="2.5"></circle><path d="M10.8 6.2 6.2 16.8M13.2 6.2l4.6 10.6M7.5 19h9"></path></svg>',
 }
 
-def render_metric_cards(cards: list[tuple[str, str, str]]) -> None:
+def render_metric_cards(cards: list[tuple[str, str, str]], grid_class: str = "") -> None:
     card_html = []
     for label, value, icon_name in cards:
         icon_svg = METRIC_ICON_SVGS.get(icon_name, METRIC_ICON_SVGS["table"])
@@ -2795,7 +2808,7 @@ def render_metric_cards(cards: list[tuple[str, str, str]]) -> None:
             f'<div><div class="atlas-metric-label">{escape(label)}</div>'
             f'<div class="atlas-metric-value">{escape(value)}</div></div></div>'
         )
-    st.markdown(f'<div class="atlas-metric-grid">{"".join(card_html)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="atlas-metric-grid {escape(grid_class)}">{"".join(card_html)}</div>', unsafe_allow_html=True)
 
 
 def render_preview_table(df: pd.DataFrame, row_limit: int = TABLE_PREVIEW_ROW_LIMIT) -> None:
