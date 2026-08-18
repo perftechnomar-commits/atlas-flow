@@ -676,6 +676,36 @@ def apply_custom_css() -> None:
                 max-width: none !important;
                 padding: 3.55rem 1.9rem 3rem 2.35rem !important;
             }
+
+            /* A collapsed sidebar should create a focused wide-canvas view, not
+               leave an empty sidebar-sized gutter beside the content. */
+            section[data-testid="stSidebar"][aria-expanded="false"] {
+                width: 0 !important;
+                min-width: 0 !important;
+            }
+
+            section[data-testid="stSidebar"][aria-expanded="false"] ~ div[data-testid="stMain"] .block-container {
+                max-width: 1440px !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
+                padding: 3.9rem clamp(2.4rem, 5vw, 5.75rem) 3.25rem !important;
+            }
+
+            section[data-testid="stSidebar"][aria-expanded="false"] ~ div[data-testid="stMain"] .atlas-metric-grid {
+                gap: 1.55rem;
+            }
+
+            section[data-testid="stSidebar"][aria-expanded="false"] ~ div[data-testid="stMain"] .atlas-tabbar {
+                flex-wrap: nowrap;
+                justify-content: space-between;
+                gap: 0.7rem;
+                overflow-x: auto;
+                scrollbar-width: none;
+            }
+
+            section[data-testid="stSidebar"][aria-expanded="false"] ~ div[data-testid="stMain"] .atlas-tabbar::-webkit-scrollbar {
+                display: none;
+            }
         }
 
         @media (max-width: 768px) {
