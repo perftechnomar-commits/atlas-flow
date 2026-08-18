@@ -2817,20 +2817,25 @@ def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
                 "config": {"view": {"stroke": "transparent"}},
             }
         else:
-            spec = {
-                "mark": {"type": "bar"},
-                "encoding": {
-                    "x": common_x,
-                    "xOffset": {"field": "KPI"},
-                    "y": {"field": "Value", "type": "quantitative", "stack": None, "axis": None},
-                    "color": {
-                        "field": "KPI",
-                        "type": "nominal",
-                        "scale": {"domain": kpi_columns, "range": colors},
-                        "legend": None,
+            layers = []
+            for kpi, color in zip(kpi_columns, colors):
+                layers.append({
+                    "transform": [{"filter": f"datum.KPI === '{kpi}'"}],
+                    "mark": {"type": "bar", "color": color},
+                    "encoding": {
+                        "x": common_x,
+                        "xOffset": {
+                            "field": "KPI",
+                            "type": "nominal",
+                            "scale": {"domain": kpi_columns},
+                        },
+                        "y": {"field": "Value", "type": "quantitative", "axis": None},
+                        "tooltip": tooltip,
                     },
-                    "tooltip": tooltip,
-                },
+                })
+            spec = {
+                "layer": layers,
+                "resolve": {"scale": {"y": "independent"}},
                 "config": {"view": {"stroke": "transparent"}},
             }
 
