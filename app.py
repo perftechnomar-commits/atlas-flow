@@ -3016,7 +3016,7 @@ METRIC_ICON_SVGS = {
     "report_count": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h8l4 4v14H7Z"></path><path d="M15 3v5h4M10 12h6M10 16h6M4 7h3M4 11h3M4 15h3"></path></svg>',
     "fuel_total": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h7a2 2 0 0 1 2 2v14H5V6a2 2 0 0 1 2-2Z"></path><path d="M8.5 8h4.5M16 7h2l2 3v7a2 2 0 0 1-2 2h-2M20 10h-2"></path></svg>',
     "fuel_grade": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3s6 6.1 6 10.4a6 6 0 0 1-12 0C6 9.1 12 3 12 3Z"></path><path d="M9 13.2h6M9.8 16h4.4"></path></svg>',
-    "oil_barrel": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h10l1.6 3.2-1.1 2.8 1.1 2.8-1.6 3.2H7l-1.6-3.2 1.1-2.8-1.1-2.8L7 3.5Z"></path><path d="M5.5 6.7h13M6.4 12h11.2M5.5 17.3h13M9.2 3.7v15.8M14.8 3.7v15.8"></path></svg>',
+    "oil_barrel": '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="6.2" ry="2.1"></ellipse><path d="M5.8 5v14c0 1.2 2.8 2.2 6.2 2.2s6.2-1 6.2-2.2V5"></path><path d="M5.8 10h12.4M5.8 16h12.4"></path></svg>',
     "oil_drop": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3s6 6.1 6 10.4a6 6 0 0 1-12 0C6 9.1 12 3 12 3Z"></path></svg>',
     "average": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"></path><path d="M7 17V9M12 17V6M17 17v-5"></path><path d="M4 12h16"></path></svg>',
     "total": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5H7l6 7-6 7h10.5"></path></svg>',
