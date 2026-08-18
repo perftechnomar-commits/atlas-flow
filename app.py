@@ -2370,7 +2370,9 @@ def filter_long_data(
 
     start_timestamp = pd.Timestamp(selected_start, tz="UTC")
     end_timestamp = pd.Timestamp(selected_end + timedelta(days=1), tz="UTC")
-    start_values = pd.to_datetime(df["StartDateTimeGMT"], errors="coerce", utc=True)
+    start_values = df["StartDateTimeGMT"]
+    if not pd.api.types.is_datetime64_any_dtype(start_values):
+        start_values = pd.to_datetime(start_values, errors="coerce", utc=True)
 
     filtered = df[
         match_selected_vessels(df["ShipName"], selected_vessels)
@@ -2846,6 +2848,16 @@ def apply_teal_excel_table_format(worksheet: Any, numeric_columns: set[int]) -> 
                 cell.number_format = "#,##0.00"
 
 
+def excel_column_display_width(series: pd.Series, column_name: str, is_numeric: bool) -> int:
+    if is_numeric:
+        values = pd.to_numeric(series, errors="coerce").dropna()
+        content_width = int(values.map(lambda value: len(f"{float(value):,.2f}")).max()) if not values.empty else 0
+    else:
+        values = series.dropna().astype(str)
+        content_width = int(values.str.len().max()) if not values.empty else 0
+    return min(max(max(len(str(column_name)), content_width) + 2, 12), 48)
+
+
 def autofit_excel_columns(
     worksheet: Any,
     df: pd.DataFrame,
@@ -2854,14 +2866,10 @@ def autofit_excel_columns(
 ) -> None:
     for column_index, column_name in enumerate(df.columns, start=1):
         series = df.iloc[:, column_index - 1]
-        if column_index in numeric_columns:
-            values = pd.to_numeric(series, errors="coerce").dropna()
-            content_width = int(values.map(lambda value: len(f"{float(value):,.2f}")).max()) if not values.empty else 0
-        else:
-            values = series.dropna().astype(str)
-            content_width = int(values.str.len().max()) if not values.empty else 0
-        column_width = max(len(str(column_name)), content_width)
-        worksheet.column_dimensions[get_column_letter(column_index)].width = min(max(column_width + 2, 12), max_width)
+        worksheet.column_dimensions[get_column_letter(column_index)].width = min(
+            excel_column_display_width(series, str(column_name), column_index in numeric_columns),
+            max_width,
+        )
 
 
 def write_table_sheet(writer: Any, df: pd.DataFrame, sheet_name: str, table_name: str) -> None:
@@ -2892,9 +2900,55 @@ def to_displayed_table_excel_bytes(display_df: pd.DataFrame, sheet_name: str = "
     This avoids preparing multiple hidden sheets during a normal tab export and keeps
     memory usage lower on Streamlit Cloud.
     """
+    safe_df = make_excel_safe_dataframe(display_df)
     output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        write_table_sheet(writer, display_df, sheet_name[:31], "AtlasFlowDisplayedTable")
+    with pd.ExcelWriter(output, engine="xlsxwriter", datetime_format="dd/mm/yyyy hh:mm") as writer:
+        safe_df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
+        workbook = writer.book
+        worksheet = writer.sheets[sheet_name[:31]]
+        header_format = workbook.add_format({
+            "bg_color": "#006B68", "font_color": "#FFFFFF", "bold": True,
+            "align": "center", "valign": "vcenter", "text_wrap": True,
+            "border": 1, "border_color": "#B7DCD8",
+        })
+        stripe_format = workbook.add_format({"bg_color": "#EAF7F5"})
+        numeric_format = workbook.add_format({"num_format": "#,##0.00"})
+        numeric_columns = numeric_excel_column_indexes(safe_df)
+
+        for column_index, column_name in enumerate(safe_df.columns):
+            is_numeric = (column_index + 1) in numeric_columns
+            worksheet.set_column(
+                column_index,
+                column_index,
+                excel_column_display_width(safe_df.iloc[:, column_index], str(column_name), is_numeric),
+                numeric_format if is_numeric else None,
+            )
+
+        if safe_df.empty:
+            worksheet.set_row(0, None, header_format)
+        else:
+            worksheet.add_table(
+                0,
+                0,
+                len(safe_df),
+                len(safe_df.columns) - 1,
+                {
+                    "name": "AtlasFlowDisplayedTable",
+                    "style": None,
+                    "columns": [
+                        {"header": str(column), "header_format": header_format}
+                        for column in safe_df.columns
+                    ],
+                },
+            )
+            worksheet.conditional_format(
+                1,
+                0,
+                len(safe_df),
+                len(safe_df.columns) - 1,
+                {"type": "formula", "criteria": "=MOD(ROW(),2)=0", "format": stripe_format},
+            )
+        worksheet.freeze_panes(1, 0)
     return output.getvalue()
 
 
@@ -9216,13 +9270,34 @@ def main() -> None:
 
     # ReportType is handled with the rest of the displayed-column filters.
     selected_report_types: list[str] = []
-    filtered_long_for_options = filter_long_data(
-        long_df,
-        selected_vessels=selected_vessels,
-        selected_report_types=selected_report_types,
-        selected_start=selected_start,
-        selected_end=selected_end,
-    )
+    long_filter_signature = sha256(
+        (
+            f"{metadata.get('snapshot_generation')}|{tuple(selected_vessels)}|"
+            f"{selected_start.isoformat()}|{selected_end.isoformat()}|{tuple(selected_report_types)}"
+        ).encode("utf-8")
+    ).hexdigest()
+    cached_filtered_long = st.session_state.get("atlas_filtered_long_cache")
+    if (
+        st.session_state.get("atlas_filtered_long_cache_signature") == long_filter_signature
+        and isinstance(cached_filtered_long, pd.DataFrame)
+    ):
+        filtered_long_for_options = cached_filtered_long
+    else:
+        filtered_long_for_options = filter_long_data(
+            long_df,
+            selected_vessels=selected_vessels,
+            selected_report_types=selected_report_types,
+            selected_start=selected_start,
+            selected_end=selected_end,
+        )
+        # Keep a single modest selection in memory; wide fleet filters are rebuilt
+        # rather than risking Streamlit Cloud memory pressure.
+        if dataframe_memory_mb(filtered_long_for_options) <= 96:
+            st.session_state["atlas_filtered_long_cache"] = filtered_long_for_options
+            st.session_state["atlas_filtered_long_cache_signature"] = long_filter_signature
+        else:
+            st.session_state.pop("atlas_filtered_long_cache", None)
+            st.session_state.pop("atlas_filtered_long_cache_signature", None)
 
     variable_options = sorted(
         set(available_variables(filtered_long_for_options)).union(DERIVED_VARIABLES),
