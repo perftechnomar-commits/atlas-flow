@@ -646,7 +646,8 @@ def apply_custom_css() -> None:
             display: flex;
             align-items: center;
             gap: 0.95rem;
-            padding-left: 1.35rem;
+            /* Reserve a clear gutter for the native sidebar menu control. */
+            padding-left: 4.5rem;
             z-index: 999996;
             pointer-events: none;
         }
@@ -2762,6 +2763,13 @@ def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
 
     monthly_consumption = work.dropna(subset=["Month"]).groupby("Month", as_index=False)[consumption_columns].sum(min_count=1)
     vessel_consumption = work.dropna(subset=["ShipName"]).groupby("ShipName", as_index=False)[consumption_columns].sum(min_count=1)
+    consumption_chart_labels = {
+        "MELO Consumption Total [ltr]": "MELO Consumption [ltr]",
+        "CYLO Consumption Total [ltr]": "CYLO Consumption [ltr]",
+        "GELO Consumption Total [ltr]": "GELO Consumption [ltr]",
+    }
+    monthly_consumption_chart = monthly_consumption.rename(columns=consumption_chart_labels)
+    vessel_consumption_chart = vessel_consumption.rename(columns=consumption_chart_labels)
     monthly = summarize_oil_kpis(work.dropna(subset=["Month"]), "Month")
     vessel_summary = summarize_oil_kpis(work.dropna(subset=["ShipName"]), "ShipName")
 
@@ -2841,11 +2849,11 @@ def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
     with chart_left:
         st.markdown('<div class="section-title">Consumption by Month</div>', unsafe_allow_html=True)
         if not monthly_consumption.empty:
-            st.line_chart(monthly_consumption.set_index("Month"), use_container_width=True)
+            st.line_chart(monthly_consumption_chart.set_index("Month"), use_container_width=True)
     with chart_right:
         st.markdown('<div class="section-title">Consumption by Vessel</div>', unsafe_allow_html=True)
         if not vessel_consumption.empty:
-            st.bar_chart(vessel_consumption.set_index("ShipName"), use_container_width=True)
+            st.bar_chart(vessel_consumption_chart.set_index("ShipName"), use_container_width=True)
 
     kpi_chart_left, kpi_chart_right = st.columns(2)
     with kpi_chart_left:
