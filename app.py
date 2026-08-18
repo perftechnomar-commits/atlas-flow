@@ -580,11 +580,13 @@ def apply_custom_css() -> None:
         /* Keep Streamlit's native sidebar behavior, but present it as the
            familiar navigation menu control instead of a directional chevron. */
         button[data-testid="stSidebarCollapsedControl"],
+        button[data-testid="stExpandSidebarButton"],
+        button[data-testid="stSidebarCollapseButton"],
         [data-testid="stSidebarCollapsedControl"] button,
-        button[aria-label="Show sidebar"],
-        button[aria-label="Hide sidebar"],
-        button[aria-label="Open sidebar"],
-        button[aria-label="Close sidebar"] {
+        [data-testid="stExpandSidebarButton"] button,
+        [data-testid="stSidebarCollapseButton"] button,
+        header button[aria-label*="sidebar" i],
+        header button[title*="sidebar" i] {
             width: 2.65rem !important;
             height: 2.65rem !important;
             min-width: 2.65rem !important;
@@ -598,30 +600,36 @@ def apply_custom_css() -> None:
         }
 
         button[data-testid="stSidebarCollapsedControl"]:hover,
+        button[data-testid="stExpandSidebarButton"]:hover,
+        button[data-testid="stSidebarCollapseButton"]:hover,
         [data-testid="stSidebarCollapsedControl"] button:hover,
-        button[aria-label="Show sidebar"]:hover,
-        button[aria-label="Hide sidebar"]:hover,
-        button[aria-label="Open sidebar"]:hover,
-        button[aria-label="Close sidebar"]:hover {
+        [data-testid="stExpandSidebarButton"] button:hover,
+        [data-testid="stSidebarCollapseButton"] button:hover,
+        header button[aria-label*="sidebar" i]:hover,
+        header button[title*="sidebar" i]:hover {
             background: #EAF6F5 !important;
             border-color: #C9E8E5 !important;
         }
 
-        button[data-testid="stSidebarCollapsedControl"] svg,
-        [data-testid="stSidebarCollapsedControl"] button svg,
-        button[aria-label="Show sidebar"] svg,
-        button[aria-label="Hide sidebar"] svg,
-        button[aria-label="Open sidebar"] svg,
-        button[aria-label="Close sidebar"] svg {
+        button[data-testid="stSidebarCollapsedControl"] > *,
+        button[data-testid="stExpandSidebarButton"] > *,
+        button[data-testid="stSidebarCollapseButton"] > *,
+        [data-testid="stSidebarCollapsedControl"] button > *,
+        [data-testid="stExpandSidebarButton"] button > *,
+        [data-testid="stSidebarCollapseButton"] button > *,
+        header button[aria-label*="sidebar" i] > *,
+        header button[title*="sidebar" i] > * {
             display: none !important;
         }
 
         button[data-testid="stSidebarCollapsedControl"]::after,
+        button[data-testid="stExpandSidebarButton"]::after,
+        button[data-testid="stSidebarCollapseButton"]::after,
         [data-testid="stSidebarCollapsedControl"] button::after,
-        button[aria-label="Show sidebar"]::after,
-        button[aria-label="Hide sidebar"]::after,
-        button[aria-label="Open sidebar"]::after,
-        button[aria-label="Close sidebar"]::after {
+        [data-testid="stExpandSidebarButton"] button::after,
+        [data-testid="stSidebarCollapseButton"] button::after,
+        header button[aria-label*="sidebar" i]::after,
+        header button[title*="sidebar" i]::after {
             content: "\\2630";
             color: var(--atlas-teal) !important;
             font-family: Arial, sans-serif !important;
@@ -2752,6 +2760,8 @@ def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
         )
         return totals.replace([float("inf"), float("-inf")], pd.NA)
 
+    monthly_consumption = work.dropna(subset=["Month"]).groupby("Month", as_index=False)[consumption_columns].sum(min_count=1)
+    vessel_consumption = work.dropna(subset=["ShipName"]).groupby("ShipName", as_index=False)[consumption_columns].sum(min_count=1)
     monthly = summarize_oil_kpis(work.dropna(subset=["Month"]), "Month")
     vessel_summary = summarize_oil_kpis(work.dropna(subset=["ShipName"]), "ShipName")
 
@@ -2766,66 +2776,90 @@ def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
             st.info("No KPI data is available for this view.")
             return
 
-        mark: dict[str, Any] = {"type": chart_type}
-        if chart_type == "line":
-            mark.update({"point": True, "strokeWidth": 2.2})
+        colors = ["#FF2D2D", "#006BCE", "#78BAF0"]
+        common_x = {
+            "field": dimension,
+            "type": "ordinal",
+            "sort": None,
+            "axis": {"title": None, "labelAngle": -90},
+        }
+        tooltip = [
+            {"field": dimension, "type": "nominal", "title": dimension},
+            {"field": "KPI", "type": "nominal", "title": "KPI"},
+            {"field": "Value", "type": "quantitative", "format": ",.2f"},
+        ]
 
-        st.vega_lite_chart(
-            chart_data,
-            {
-                "mark": mark,
+        if chart_type == "line":
+            # Independent, hidden y-scales keep the three units legible without
+            # implying that ltr/day and g/kWh share a common measurement scale.
+            layers = []
+            for kpi, color in zip(kpi_columns, colors):
+                layers.append({
+                    "transform": [{"filter": f"datum.KPI === '{kpi}'"}],
+                    "mark": {"type": "line", "point": True, "strokeWidth": 2.2, "color": color},
+                    "encoding": {
+                        "x": common_x,
+                        "y": {"field": "Value", "type": "quantitative", "axis": None},
+                        "tooltip": tooltip,
+                    },
+                })
+            spec: dict[str, Any] = {
+                "layer": layers,
+                "resolve": {"scale": {"y": "independent"}},
+                "config": {"view": {"stroke": "transparent"}},
+            }
+        else:
+            spec = {
+                "mark": {"type": "bar"},
                 "encoding": {
-                    "x": {
-                        "field": dimension,
-                        "type": "ordinal",
-                        "sort": None,
-                        "axis": {"title": None, "labelAngle": -90},
-                    },
-                    "y": {
-                        "field": "Value",
-                        "type": "quantitative",
-                        "axis": {"title": None, "format": ",.2f"},
-                    },
+                    "x": common_x,
+                    "xOffset": {"field": "KPI"},
+                    "y": {"field": "Value", "type": "quantitative", "stack": None, "axis": None},
                     "color": {
                         "field": "KPI",
                         "type": "nominal",
-                        "scale": {
-                            "domain": kpi_columns,
-                            "range": ["#FF2D2D", "#006BCE", "#78BAF0"],
-                        },
-                        "legend": {
-                            "title": None,
-                            "orient": "bottom",
-                            "direction": "horizontal",
-                            "anchor": "middle",
-                            "columns": 3,
-                            "labelLimit": 190,
-                        },
+                        "scale": {"domain": kpi_columns, "range": colors},
+                        "legend": None,
                     },
-                    "tooltip": [
-                        {"field": dimension, "type": "nominal", "title": dimension},
-                        {"field": "KPI", "type": "nominal", "title": "KPI"},
-                        {"field": "Value", "type": "quantitative", "format": ",.2f"},
-                    ],
+                    "tooltip": tooltip,
                 },
                 "config": {"view": {"stroke": "transparent"}},
-            },
-            use_container_width=True,
+            }
+
+        st.vega_lite_chart(chart_data, spec, use_container_width=True)
+        st.markdown(
+            '<div style="display:flex;justify-content:center;gap:1.35rem;flex-wrap:wrap;'
+            'font-size:0.82rem;color:#4B617A;margin-top:-0.2rem;">'
+            '<span><b style="color:#FF2D2D;">&#9679;</b> MELO [ltr/running day]</span>'
+            '<span><b style="color:#006BCE;">&#9679;</b> CYLO SLOC [g/kWh]</span>'
+            '<span><b style="color:#78BAF0;">&#9679;</b> GELO [ltr/DG running day]</span>'
+            '</div>',
+            unsafe_allow_html=True,
         )
 
     chart_left, chart_right = st.columns(2)
     with chart_left:
+        st.markdown('<div class="section-title">Consumption by Month</div>', unsafe_allow_html=True)
+        if not monthly_consumption.empty:
+            st.line_chart(monthly_consumption.set_index("Month"), use_container_width=True)
+    with chart_right:
+        st.markdown('<div class="section-title">Consumption by Vessel</div>', unsafe_allow_html=True)
+        if not vessel_consumption.empty:
+            st.bar_chart(vessel_consumption.set_index("ShipName"), use_container_width=True)
+
+    kpi_chart_left, kpi_chart_right = st.columns(2)
+    with kpi_chart_left:
         st.markdown('<div class="section-title">KPI Trends by Month</div>', unsafe_allow_html=True)
         if not monthly.empty:
             render_oil_kpi_chart(monthly, "Month", "line")
-    with chart_right:
+    with kpi_chart_right:
         st.markdown('<div class="section-title">KPI Comparison by Vessel</div>', unsafe_allow_html=True)
         if not vessel_summary.empty:
             render_oil_kpi_chart(vessel_summary, "ShipName", "bar")
 
     st.markdown('<div class="section-title">Vessel Comparison</div>', unsafe_allow_html=True)
     st.dataframe(
-        format_display_dataframe(vessel_summary[["ShipName"] + kpi_columns]),
+        format_display_dataframe(vessel_consumption),
         use_container_width=True,
         hide_index=True,
     )
