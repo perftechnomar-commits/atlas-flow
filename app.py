@@ -2769,6 +2769,22 @@ def make_excel_safe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for column in safe_df.columns:
         if pd.api.types.is_datetime64_any_dtype(safe_df[column]):
             safe_df[column] = pd.to_datetime(safe_df[column], errors="coerce").dt.tz_localize(None)
+            continue
+
+        # Wide API exports often hold numbers as strings. Promote only columns whose
+        # meaningful values are all numeric, so names, UUIDs, dates, and mixed data stay text.
+        column_label = str(column).casefold()
+        if pd.api.types.is_numeric_dtype(safe_df[column]) or pd.api.types.is_bool_dtype(safe_df[column]):
+            continue
+        if any(token in column_label for token in ("date", "time", "timestamp")):
+            continue
+
+        text_values = safe_df[column].astype("string").str.strip()
+        text_values = text_values.mask(text_values.str.casefold().isin({"", "-", "nan", "nat", "none", "null", "n/a"}))
+        numeric_values = pd.to_numeric(text_values.str.replace(",", "", regex=False), errors="coerce")
+        non_blank_values = text_values.notna()
+        if non_blank_values.any() and numeric_values[non_blank_values].notna().all():
+            safe_df[column] = numeric_values
     return safe_df
 
 
