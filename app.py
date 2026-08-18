@@ -2581,7 +2581,7 @@ def add_performance_calculations(pivot_df: pd.DataFrame, source_table: pd.DataFr
 
 def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
     """Present AtlasFlow's existing ROB-based oil calculations as an oil workflow."""
-    st.markdown('<div class="section-title">Lubricating Oil Analysis</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Lub Oil Analysis</div>', unsafe_allow_html=True)
     st.caption("Consumption is calculated from ROB movement and received quantities for the selected vessels and period.")
 
     oil_df = build_pivot_table(filtered_long_df, tuple())
@@ -2651,12 +2651,12 @@ def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
     export_signature = sha256(f"{len(detail_df)}|{detail_df.get('EndDateTimeGMT', pd.Series(dtype='object')).max()}".encode("utf-8")).hexdigest()
     if st.session_state.get("atlas_lub_oil_export_signature") != export_signature:
         st.session_state.pop("atlas_lub_oil_export_bytes", None)
-    if st.button("Prepare lubricating oil Excel", type="primary"):
-        with st.spinner("Preparing lubricating oil Excel..."):
+    if st.button("Prepare lub oil Excel", type="primary"):
+        with st.spinner("Preparing lub oil Excel..."):
             st.session_state["atlas_lub_oil_export_bytes"] = to_excel_bytes(detail_df)
             st.session_state["atlas_lub_oil_export_signature"] = export_signature
     if st.session_state.get("atlas_lub_oil_export_signature") == export_signature and "atlas_lub_oil_export_bytes" in st.session_state:
-        st.download_button("Download lubricating oil Excel", st.session_state["atlas_lub_oil_export_bytes"], "atlasflow_lubricating_oil.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Download lub oil Excel", st.session_state["atlas_lub_oil_export_bytes"], "atlasflow_lub_oil.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @st.cache_data(show_spinner=False)
@@ -9411,7 +9411,7 @@ def main() -> None:
     workspace_options = [
         "Monthly Comparison",
         "Voyage Analysis",
-        "Lubricating Oil Analysis",
+        "Lub Oil Analysis",
         "Custom Analytics",
         "Noon & Manual Reports",
         "High-Frequency",
@@ -9462,7 +9462,7 @@ def main() -> None:
             "The loaded dataset may be incomplete. Check API Diagnostics before using the export."
         )
 
-    if workspace in {"Monthly Comparison", "Voyage Analysis", "Lubricating Oil Analysis"}:
+    if workspace in {"Monthly Comparison", "Voyage Analysis", "Lub Oil Analysis"}:
         # Monthly Comparison reads pre-aggregated summaries. Voyage Analysis
         # builds its own voyage/report views directly from the prepared sources.
         # does not need to build the report-level pivot or its filter controls.
@@ -9549,7 +9549,7 @@ def main() -> None:
             selected_end,
         )
 
-    elif workspace == "Lubricating Oil Analysis":
+    elif workspace == "Lub Oil Analysis":
         render_lubricating_oil_workspace(filtered_long_for_options)
 
     elif workspace == "Custom Analytics":
