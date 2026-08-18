@@ -577,6 +577,59 @@ def apply_custom_css() -> None:
             display: none !important;
         }
 
+        /* Keep Streamlit's native sidebar behavior, but present it as the
+           familiar navigation menu control instead of a directional chevron. */
+        button[data-testid="stSidebarCollapsedControl"],
+        [data-testid="stSidebarCollapsedControl"] button,
+        button[aria-label="Show sidebar"],
+        button[aria-label="Hide sidebar"],
+        button[aria-label="Open sidebar"],
+        button[aria-label="Close sidebar"] {
+            width: 2.65rem !important;
+            height: 2.65rem !important;
+            min-width: 2.65rem !important;
+            margin: 0.42rem 0 0 0.42rem !important;
+            border: 1px solid transparent !important;
+            border-radius: 6px !important;
+            background: transparent !important;
+            color: transparent !important;
+            font-size: 0 !important;
+            box-shadow: none !important;
+        }
+
+        button[data-testid="stSidebarCollapsedControl"]:hover,
+        [data-testid="stSidebarCollapsedControl"] button:hover,
+        button[aria-label="Show sidebar"]:hover,
+        button[aria-label="Hide sidebar"]:hover,
+        button[aria-label="Open sidebar"]:hover,
+        button[aria-label="Close sidebar"]:hover {
+            background: #EAF6F5 !important;
+            border-color: #C9E8E5 !important;
+        }
+
+        button[data-testid="stSidebarCollapsedControl"] svg,
+        [data-testid="stSidebarCollapsedControl"] button svg,
+        button[aria-label="Show sidebar"] svg,
+        button[aria-label="Hide sidebar"] svg,
+        button[aria-label="Open sidebar"] svg,
+        button[aria-label="Close sidebar"] svg {
+            display: none !important;
+        }
+
+        button[data-testid="stSidebarCollapsedControl"]::after,
+        [data-testid="stSidebarCollapsedControl"] button::after,
+        button[aria-label="Show sidebar"]::after,
+        button[aria-label="Hide sidebar"]::after,
+        button[aria-label="Open sidebar"]::after,
+        button[aria-label="Close sidebar"]::after {
+            content: "\\2630";
+            color: var(--atlas-teal) !important;
+            font-family: Arial, sans-serif !important;
+            font-size: 1.35rem !important;
+            font-weight: 600 !important;
+            line-height: 1 !important;
+        }
+
         .atlas-topbar-brand {
             position: fixed;
             top: 0;
@@ -2663,21 +2716,119 @@ def render_lubricating_oil_workspace(filtered_long_df: pd.DataFrame) -> None:
     work = oil_df.copy()
     work["EndDateTimeGMT"] = pd.to_datetime(work.get("EndDateTimeGMT"), errors="coerce", utc=True)
     work["Month"] = work["EndDateTimeGMT"].dt.tz_localize(None).dt.to_period("M").astype("string")
-    monthly = work.dropna(subset=["Month"]).groupby("Month", as_index=False)[consumption_columns].sum(min_count=1)
-    vessel_summary = work.groupby("ShipName", as_index=False)[consumption_columns].sum(min_count=1)
+    def numeric_oil_column(column: str) -> pd.Series:
+        if column in work.columns:
+            return pd.to_numeric(work[column], errors="coerce")
+        return pd.Series(pd.NA, index=work.index, dtype="Float64")
+
+    work["_atlas_steaming_hours"] = numeric_oil_column("Steaming Time Since Last Report [hh:mm]")
+    work["_atlas_dg_hours"] = numeric_oil_column("Total DG Running Hours [hh:mm]")
+    work["_atlas_torque_energy"] = (
+        numeric_oil_column("Power from Torque Meter [kW]")
+        * numeric_oil_column("LapTime")
+    )
+
+    kpi_columns = [
+        "MELO [ltr/running day]",
+        "CYLO SLOC [g/kWh]",
+        "GELO [ltr/DG running day]",
+    ]
+
+    def summarize_oil_kpis(frame: pd.DataFrame, group_column: str) -> pd.DataFrame:
+        totals = frame.groupby(group_column, as_index=False)[
+            consumption_columns + ["_atlas_steaming_hours", "_atlas_dg_hours", "_atlas_torque_energy"]
+        ].sum(min_count=1)
+        totals["MELO [ltr/running day]"] = safe_divide(
+            totals["MELO Consumption Total [ltr]"] * 24,
+            totals["_atlas_steaming_hours"],
+        )
+        totals["CYLO SLOC [g/kWh]"] = safe_divide(
+            totals["CYLO Consumption Total [ltr]"] * 0.93 * 1000,
+            totals["_atlas_torque_energy"],
+        )
+        totals["GELO [ltr/DG running day]"] = safe_divide(
+            totals["GELO Consumption Total [ltr]"] * 24,
+            totals["_atlas_dg_hours"],
+        )
+        return totals.replace([float("inf"), float("-inf")], pd.NA)
+
+    monthly = summarize_oil_kpis(work.dropna(subset=["Month"]), "Month")
+    vessel_summary = summarize_oil_kpis(work.dropna(subset=["ShipName"]), "ShipName")
+
+    def render_oil_kpi_chart(summary: pd.DataFrame, dimension: str, chart_type: str) -> None:
+        chart_data = summary[[dimension] + kpi_columns].melt(
+            id_vars=dimension,
+            value_vars=kpi_columns,
+            var_name="KPI",
+            value_name="Value",
+        ).dropna(subset=["Value"])
+        if chart_data.empty:
+            st.info("No KPI data is available for this view.")
+            return
+
+        mark: dict[str, Any] = {"type": chart_type}
+        if chart_type == "line":
+            mark.update({"point": True, "strokeWidth": 2.2})
+
+        st.vega_lite_chart(
+            chart_data,
+            {
+                "mark": mark,
+                "encoding": {
+                    "x": {
+                        "field": dimension,
+                        "type": "ordinal",
+                        "sort": None,
+                        "axis": {"title": None, "labelAngle": -90},
+                    },
+                    "y": {
+                        "field": "Value",
+                        "type": "quantitative",
+                        "axis": {"title": None, "format": ",.2f"},
+                    },
+                    "color": {
+                        "field": "KPI",
+                        "type": "nominal",
+                        "scale": {
+                            "domain": kpi_columns,
+                            "range": ["#FF2D2D", "#006BCE", "#78BAF0"],
+                        },
+                        "legend": {
+                            "title": None,
+                            "orient": "bottom",
+                            "direction": "horizontal",
+                            "anchor": "middle",
+                            "columns": 3,
+                            "labelLimit": 190,
+                        },
+                    },
+                    "tooltip": [
+                        {"field": dimension, "type": "nominal", "title": dimension},
+                        {"field": "KPI", "type": "nominal", "title": "KPI"},
+                        {"field": "Value", "type": "quantitative", "format": ",.2f"},
+                    ],
+                },
+                "config": {"view": {"stroke": "transparent"}},
+            },
+            use_container_width=True,
+        )
 
     chart_left, chart_right = st.columns(2)
     with chart_left:
-        st.markdown('<div class="section-title">Consumption by Month</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">KPI Trends by Month</div>', unsafe_allow_html=True)
         if not monthly.empty:
-            st.line_chart(monthly.set_index("Month"), use_container_width=True)
+            render_oil_kpi_chart(monthly, "Month", "line")
     with chart_right:
-        st.markdown('<div class="section-title">Consumption by Vessel</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">KPI Comparison by Vessel</div>', unsafe_allow_html=True)
         if not vessel_summary.empty:
-            st.bar_chart(vessel_summary.set_index("ShipName"), use_container_width=True)
+            render_oil_kpi_chart(vessel_summary, "ShipName", "bar")
 
     st.markdown('<div class="section-title">Vessel Comparison</div>', unsafe_allow_html=True)
-    st.dataframe(format_display_dataframe(vessel_summary), use_container_width=True, hide_index=True)
+    st.dataframe(
+        format_display_dataframe(vessel_summary[["ShipName"] + kpi_columns]),
+        use_container_width=True,
+        hide_index=True,
+    )
 
     detail_columns = [column for column in [
         "ShipName", "EndDateTimeGMT", "ReportId", "ReportType", "StateName",
