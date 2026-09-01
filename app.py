@@ -3898,7 +3898,7 @@ def clamp_period(start_value: date, end_value: date, min_date: date, max_date: d
 
 
 def dynamic_period_dates(period_label: str, min_date: date, max_date: date) -> tuple[date, date]:
-    anchor_date = date.today())
+    anchor_date = date.today()
 
     if period_label == "YTD":
         start_value = date(anchor_date.year, 1, 1)
