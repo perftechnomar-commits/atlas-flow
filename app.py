@@ -3910,14 +3910,14 @@ def dynamic_period_dates(period_label: str, min_date: date, max_date: date) -> t
         end_value = last_day_previous_month(anchor_date)
         start_value = date(end_value.year, 1, 1)
     elif period_label == "Previous 3 months":
-        end_value = anchor_date
-        start_value = add_months(anchor_date, -3) + timedelta(days=1)
+        end_value = last_day_previous_month(anchor_date)
+        start_value = add_months(first_day_of_month(end_value), -2)
     elif period_label == "Previous 6 months":
-        end_value = anchor_date
-        start_value = add_months(anchor_date, -6) + timedelta(days=1)
+        end_value = last_day_previous_month(anchor_date)
+        start_value = add_months(first_day_of_month(end_value), -5)
     elif period_label == "Previous 12 months":
-        end_value = anchor_date
-        start_value = add_months(anchor_date, -12) + timedelta(days=1)
+        end_value = last_day_previous_month(anchor_date)
+        start_value = add_months(first_day_of_month(end_value), -11)
     else:
         start_value = min_date
         end_value = max_date
