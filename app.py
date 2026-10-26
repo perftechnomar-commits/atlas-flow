@@ -128,6 +128,9 @@ PERFORMANCE_KPI_VALUE_ALIASES = {
         "ME Load [%MCR]",
         "ME Load [% MCR]",
     ],
+    "Total DG Power [kW]": [
+        "Total DG Power [kW]"
+    ],
     "Power from Torque Meter [kW]": [
         "Power from Torque Meter [kW]",
         "Total Shaft Power [kW] (kW)",
