@@ -129,12 +129,17 @@ PERFORMANCE_KPI_VALUE_ALIASES = {
         "ME Load [% MCR]",
     ],
     "Total DG Power [kW]": [
-        "Total DG Power [kW]"
+        "Total DG Power [kW]",
+        "Total DG Power [kW] (kW)",
     ],
     "Power from Torque Meter [kW]": [
         "Power from Torque Meter [kW]",
         "Total Shaft Power [kW] (kW)",
         "Total Shaft Power [kW]",
+    ],
+    "Total Reefer Power Draw (kW)": [
+        "Total Reefer Power Draw (kW)",
+        "Total Reefer Power[kW] (kW)",
     ],
     "GPS Speed [kn]": [
         "GPS Speed [kn]",
