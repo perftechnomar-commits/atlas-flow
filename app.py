@@ -9484,6 +9484,268 @@ def render_cargo_voyages_workspace(
 # =============================================================================
 
 
+# =============================================================================
+# Visual Analytics: independent chart and correlation controls, stored data only
+# =============================================================================
+
+def visual_numeric_options(long_df: pd.DataFrame) -> list[str]:
+    numeric = pd.to_numeric(long_df["ParsedValue"], errors="coerce")
+    names = long_df.loc[numeric.notna(), "ValueDescription"].dropna().astype(str)
+    return sorted(set(names).union(DERIVED_VARIABLES), key=str.casefold)
+
+
+def visual_build_data(long_df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Use report end UTC; exact reports are paired by report identity, never nearest time."""
+    variables = config["variables"]
+    columns = ["ShipName", "DateTime", *variables]
+    if not config["vessels"] or not variables or not config["types"]:
+        return pd.DataFrame(columns=columns)
+    ends = pd.to_datetime(long_df["EndDateTimeGMT"], errors="coerce", utc=True)
+    subset = long_df.loc[
+        match_selected_vessels(long_df["ShipName"], config["vessels"])
+        & long_df["ReportType"].astype("string").isin(config["types"])
+        & ends.ge(pd.Timestamp(config["start"], tz="UTC"))
+        & ends.lt(pd.Timestamp(config["end"] + timedelta(days=1), tz="UTC"))
+    ].copy()
+    if subset.empty:
+        return pd.DataFrame(columns=columns)
+    wide = build_pivot_table(subset, tuple(variables))
+    identities = subset[PIVOT_IDENTITY_COLUMNS].drop_duplicates()
+    wide = identities.merge(wide, on=PIVOT_IDENTITY_COLUMNS, how="left", validate="one_to_one")
+    wide["DateTime"] = pd.to_datetime(wide["EndDateTimeGMT"], errors="coerce", utc=True)
+    wide = wide.dropna(subset=["DateTime"])
+    for variable in variables:
+        wide[variable] = pd.to_numeric(wide[variable], errors="coerce").astype("float64")
+        wide[variable] = wide[variable].replace([float("inf"), -float("inf")], float("nan"))
+    if config["resolution"] == "Original reports":
+        keep = [c for c in ["ShipName", "DateTime", "ReportId", "ReportType", *variables] if c in wide]
+        return wide[keep].sort_values(["ShipName", "DateTime"]).reset_index(drop=True)
+    rule = {"Daily averages": "D", "Weekly averages": "W-MON", "Monthly averages": "MS"}[config["resolution"]]
+    pieces = []
+    for vessel, group in wide.groupby("ShipName", observed=True):
+        # Resampling retains empty periods as NaN, preserving visible chart gaps.
+        sample = group.set_index("DateTime")[variables].resample(rule, label="left", closed="left").mean()
+        sample.insert(0, "ShipName", str(vessel))
+        pieces.append(sample.reset_index())
+    return pd.concat(pieces, ignore_index=True) if pieces else pd.DataFrame(columns=columns)
+
+
+def visual_correlations(data: pd.DataFrame, variables: list[str], method: str, minimum: int):
+    numeric = data.reindex(columns=variables).apply(pd.to_numeric, errors="coerce")
+    valid = numeric.notna().astype("int64")
+    counts = valid.T.dot(valid)
+    # Pair-specific rank calculation avoids scipy and ranks only the matching rows.
+    matrix = pd.DataFrame(float("nan"), index=variables, columns=variables)
+    for i, left in enumerate(variables):
+        for right in variables[i:]:
+            pair = numeric[[left, right]].dropna() if left != right else numeric[[left]].dropna()
+            if len(pair) < minimum:
+                continue
+            x = pair[left]
+            y = pair[right]
+            if x.nunique() < 2 or y.nunique() < 2:
+                continue
+            if method == "Spearman":
+                x, y = x.rank(method="average"), y.rank(method="average")
+            value = x.corr(y)
+            matrix.loc[left, right] = value
+            matrix.loc[right, left] = value
+    return matrix, counts
+
+
+def visual_excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for name, frame in sheets.items():
+            clean = frame.copy()
+            for column in clean:
+                if isinstance(clean[column].dtype, pd.DatetimeTZDtype):
+                    clean[column] = clean[column].dt.tz_convert("UTC").dt.tz_localize(None)
+            clean.to_excel(writer, sheet_name=name[:31], index=False)
+            sheet = writer.sheets[name[:31]]
+            sheet.freeze_panes = "A2"
+            sheet.auto_filter.ref = sheet.dimensions
+            for cell in sheet[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="007F7A")
+            for column in sheet.columns:
+                sheet.column_dimensions[column[0].column_letter].width = min(48, max(18, len(str(column[0].value)) + 2))
+    return output.getvalue()
+
+
+def visual_download(prefix: str, sheets: dict[str, pd.DataFrame]):
+    if st.button("Prepare Excel export", key=f"{prefix}_prepare"):
+        payload = visual_excel_bytes(sheets)
+        st.download_button("Download Excel", payload, file_name=f"{prefix}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key=f"{prefix}_download")
+
+
+def visual_controls(prefix, vessels, options, types, start, end, defaults, correlation=False):
+    with st.form(f"{prefix}_form"):
+        a, b = st.columns(2)
+        chosen_vessels = a.multiselect("Vessels", vessels, default=defaults, key=f"{prefix}_vessels")
+        variables = b.multiselect("Numeric variables", options, key=f"{prefix}_variables")
+        a, b, c = st.columns(3)
+        period = a.date_input("Period (report end, UTC)", value=(start, end), key=f"{prefix}_period")
+        resolution = b.selectbox("Resolution", ["Original reports", "Daily averages", "Weekly averages", "Monthly averages"], key=f"{prefix}_resolution")
+        report_types = c.multiselect("Report types", types, default=types, key=f"{prefix}_types")
+        extra = {}
+        if correlation:
+            a, b, c = st.columns(3)
+            extra["method"] = a.selectbox("Correlation method", ["Pearson", "Spearman"], key=f"{prefix}_method")
+            extra["minimum"] = int(b.number_input("Minimum paired observations", min_value=3, value=10, step=1, key=f"{prefix}_minimum"))
+            extra["pool"] = c.checkbox("Pool vessels into one matrix", key=f"{prefix}_pool",
+                help="Vessel operating levels can create misleading pooled correlations. Separate matrices are the default.")
+        else:
+            extra["secondary"] = st.multiselect("Variables on secondary Y axis", options, key=f"{prefix}_secondary",
+                help="Choose from the numeric variables selected above. All other selected variables use the left axis. Keep compatible units on each axis.")
+        submitted = st.form_submit_button("Generate correlation analysis" if correlation else "Generate line chart", type="primary")
+    if submitted:
+        if len(period) != 2 or period[0] > period[1]:
+            st.error("Select a valid start and end date.")
+        elif not chosen_vessels or not report_types or len(variables) < (2 if correlation else 1):
+            st.error("Select vessels, report types and " + ("at least two numeric variables." if correlation else "at least one numeric variable."))
+        elif not correlation and not set(extra["secondary"]).issubset(variables):
+            st.error("Secondary-axis variables must also be selected in Numeric variables.")
+        else:
+            st.session_state[f"{prefix}_config"] = dict(vessels=chosen_vessels, variables=variables,
+                start=period[0], end=period[1], resolution=resolution, types=report_types, **extra)
+    return st.session_state.get(f"{prefix}_config")
+
+
+def visual_chart(data, variables, secondary):
+    plot = data.melt(id_vars=["ShipName", "DateTime"], value_vars=variables, var_name="Metric", value_name="Value")
+    plot["GapSegment"] = plot.groupby(["ShipName", "Metric"], sort=False)["Value"].transform(lambda values: values.isna().cumsum())
+    plot["DateTime"] = plot["DateTime"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # JSON-safe nulls prevent Arrow mixed-type coercion in chart rendering.
+    records = json.loads(plot.to_json(orient="records"))
+    layers = []
+    for side, metrics in [("left", [v for v in variables if v not in secondary]), ("right", secondary)]:
+        if not metrics:
+            continue
+        layers.append({"transform": [{"filter": {"field": "Metric", "oneOf": metrics}}],
+            "mark": {"type": "line", "point": True},
+            "encoding": {
+                "x": {"field": "DateTime", "type": "temporal", "title": "Report end / period start (UTC)"},
+                "y": {"field": "Value", "type": "quantitative", "title": " / ".join(metrics),
+                      "axis": {"orient": side}, "scale": {"zero": False}},
+                "color": {"field": "ShipName", "type": "nominal", "title": "Vessel"},
+                "strokeDash": {"field": "Metric", "type": "nominal", "title": "Metric", "scale": {"domain": variables}},
+                "detail": [{"field": "ShipName"}, {"field": "Metric"}, {"field": "GapSegment"}],
+                "tooltip": [{"field": "ShipName", "title": "Vessel"}, {"field": "Metric"},
+                    {"field": "DateTime", "type": "temporal"}, {"field": "Value", "format": ",.3f"}]
+            }})
+    spec = {"data": {"values": records}, "layer": layers, "height": 430,
+            "resolve": {"scale": {"y": "independent"}},
+            "params": [{"name": "time_zoom", "select": {"type": "interval", "encodings": ["x"]}, "bind": "scales"}]}
+    st.vega_lite_chart(spec, use_container_width=True)
+
+
+def visual_heatmap(matrix, counts):
+    cells = []
+    for left in matrix.index:
+        for right in matrix.columns:
+            value = matrix.loc[left, right]
+            cells.append(dict(X=right, Y=left, Correlation=None if pd.isna(value) else float(value),
+                              Pairs=int(counts.loc[left, right]), Label="N/A" if pd.isna(value) else f"{value:.2f}"))
+    base = {"x": {"field": "X", "type": "ordinal", "sort": list(matrix.columns), "title": None,
+                  "axis": {"labelAngle": -35, "labelLimit": 230}},
+            "y": {"field": "Y", "type": "ordinal", "sort": list(matrix.index), "title": None, "axis": {"labelLimit": 230}}}
+    st.vega_lite_chart({"data": {"values": cells}, "height": max(200, len(matrix) * 42),
+        "layer": [{"mark": "rect", "encoding": {**base,
+            "color": {"condition": {"test": "isValid(datum.Correlation)", "field": "Correlation", "type": "quantitative",
+                "scale": {"domain": [-1, 1], "scheme": "redblue"}}, "value": "#eeeeee"},
+            "tooltip": [{"field": "X"}, {"field": "Y"}, {"field": "Correlation"}, {"field": "Pairs"}]}},
+            {"mark": {"type": "text", "color": "black", "stroke": "white", "strokeWidth": 0.3},
+             "encoding": {**base, "text": {"field": "Label"}}}]}, use_container_width=True)
+
+
+def render_visual_analytics(long_df, default_vessels, default_start, default_end):
+    st.markdown('<div class="section-title">Visual Analytics</div>', unsafe_allow_html=True)
+    st.caption("Uses stored Custom Analytics / ReportData values. Controls below are independent of the sidebar and of each other. Dates use report end time in UTC.")
+    vessels = sorted(long_df["ShipName"].dropna().astype(str).unique(), key=str.casefold)
+    # Resolve fleet-master uppercase labels to the actual API spelling.
+    wanted = {normalize_text(v) for v in default_vessels}
+    defaults = [v for v in vessels if normalize_text(v) in wanted]
+    options, types = visual_numeric_options(long_df), available_report_types(long_df)
+    if not vessels or not options:
+        st.info("No numeric report data is available.")
+        return
+    st.subheader("Time Series")
+    chart_config = visual_controls("va_line", vessels, options, types, default_start, default_end, defaults)
+    chart_data = None
+    if chart_config:
+        chart_data = visual_build_data(long_df, chart_config)
+        if chart_data.empty or not chart_data[chart_config["variables"]].notna().any().any():
+            st.info("No data for these chart selections.")
+        else:
+            st.caption("Colour identifies vessel; line style identifies metric. Drag or scroll to zoom. Missing values remain gaps.")
+            visual_chart(chart_data, chart_config["variables"], chart_config["secondary"])
+            empty_metrics = [v for v in chart_config["variables"] if chart_data[v].notna().sum() == 0]
+            if empty_metrics:
+                st.info("No data for: " + ", ".join(empty_metrics))
+            visual_download("atlasflow_time_series", {"Plotted Data": chart_data,
+                "Settings": pd.DataFrame({"Setting": list(chart_config), "Value": [str(v) for v in chart_config.values()]})})
+    st.divider()
+    st.subheader("Correlation Analysis")
+    st.caption("Independent selections. Pairwise complete observations only; no zero filling or interpolation. Original reports pair metrics within the same report; aggregated data pairs period averages. Correlation does not imply causation.")
+    if st.button("Copy chart selections", disabled=not bool(chart_config), key="va_copy"):
+        for field in ["vessels", "variables", "types", "resolution"]:
+            st.session_state[f"va_corr_{field}"] = chart_config[field]
+        st.session_state["va_corr_period"] = (chart_config["start"], chart_config["end"])
+    corr_config = visual_controls("va_corr", vessels, options, types, default_start, default_end, defaults, correlation=True)
+    if not corr_config:
+        return
+    data = visual_build_data(long_df, corr_config)
+    variables = corr_config["variables"]
+    if data.empty:
+        st.info("No data for these correlation selections.")
+        return
+    if corr_config["pool"]:
+        st.warning("Pooled correlations combine vessel operating levels; inspect vessel-level relationships before interpreting them.")
+        groups = [("All selected vessels (pooled)", data)]
+    else:
+        groups = [(v, data.loc[data["ShipName"].eq(v)]) for v in corr_config["vessels"]]
+    coefficients, observation_counts = [], []
+    for vessel, group in groups:
+        st.markdown(f"**{escape(vessel)}**")
+        matrix, counts = visual_correlations(group, variables, corr_config["method"], corr_config["minimum"])
+        visual_heatmap(matrix, counts)
+        if not matrix.notna().any().any():
+            st.info("N/A: insufficient paired observations, missing values or constant variables.")
+        with st.expander(f"Coefficients and paired observation counts — {vessel}"):
+            st.dataframe(matrix.style.format("{:.3f}", na_rep="N/A"), use_container_width=True)
+            st.dataframe(counts, use_container_width=True)
+        for frame, target in [(matrix, coefficients), (counts, observation_counts)]:
+            export = frame.rename_axis("Variable").reset_index()
+            export.insert(0, "Vessel", vessel)
+            target.append(export)
+    st.markdown("**Inspect a variable pair**")
+    a, b = st.columns(2)
+    x = a.selectbox("X variable", variables, key="va_scatter_x")
+    y = b.selectbox("Y variable", variables, index=min(1, len(variables)-1), key="va_scatter_y")
+    pair = data.loc[data[x].notna() & data[y].notna()].copy()
+    if x == y:
+        st.info("Choose two different variables for the scatter plot.")
+    elif pair.empty:
+        st.info("No matching observations for this pair.")
+    else:
+        scatter = pair[["ShipName", "DateTime", x, y]].rename(columns={x: "XValue", y: "YValue"})
+        scatter["DateTime"] = scatter["DateTime"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        st.vega_lite_chart({"data": {"values": json.loads(scatter.to_json(orient="records"))},
+            "mark": {"type": "point", "filled": True, "opacity": 0.65}, "height": 350,
+            "encoding": {"x": {"field": "XValue", "type": "quantitative", "title": x, "scale": {"zero": False}},
+                "y": {"field": "YValue", "type": "quantitative", "title": y, "scale": {"zero": False}},
+                "color": {"field": "ShipName", "type": "nominal", "title": "Vessel"},
+                "tooltip": [{"field": "ShipName"}, {"field": "DateTime"}, {"field": "XValue"}, {"field": "YValue"}]}}, use_container_width=True)
+        st.caption(f"{len(pair):,} matching observations. Each point represents one report or aggregated vessel-period.")
+    visual_download("atlasflow_correlations", {"Coefficients": pd.concat(coefficients, ignore_index=True),
+        "Paired Counts": pd.concat(observation_counts, ignore_index=True), "Aligned Data": data,
+        "Settings": pd.DataFrame({"Setting": list(corr_config), "Value": [str(v) for v in corr_config.values()]})})
+
+
+
 def main() -> None:
     run_warmup_if_requested()
     require_dashboard_password()
@@ -9676,6 +9938,7 @@ def main() -> None:
         "Voyage Analysis",
         "Lub Oil Analysis",
         "Custom Analytics",
+        "Visual Analytics",
         "Noon & Manual Reports",
         "High-Frequency",
         "Descriptive Statistics",
@@ -9725,7 +9988,7 @@ def main() -> None:
             "The loaded dataset may be incomplete. Check API Diagnostics before using the export."
         )
 
-    if workspace in {"Monthly Comparison", "Voyage Analysis", "Lub Oil Analysis"}:
+    if workspace in {"Monthly Comparison", "Voyage Analysis", "Lub Oil Analysis", "Visual Analytics"}:
         # Monthly Comparison reads pre-aggregated summaries. Voyage Analysis
         # builds its own voyage/report views directly from the prepared sources.
         # does not need to build the report-level pivot or its filter controls.
@@ -9814,6 +10077,9 @@ def main() -> None:
 
     elif workspace == "Lub Oil Analysis":
         render_lubricating_oil_workspace(filtered_long_for_options)
+
+    elif workspace == "Visual Analytics":
+        render_visual_analytics(long_df, selected_vessels, selected_start, selected_end)
 
     elif workspace == "Custom Analytics":
         st.markdown('<div class="section-title">Custom Analytics Preview & Export</div>', unsafe_allow_html=True)
