@@ -9679,12 +9679,21 @@ def visual_chart(data, variables, secondary):
                 "color": {"field": "ShipName", "type": "nominal", "title": "Vessel"},
                 "strokeDash": {"field": "Metric", "type": "nominal", "title": "Metric", "scale": {"domain": variables}},
                 "detail": [{"field": "ShipName"}, {"field": "Metric"}, {"field": "GapSegment"}],
+                "opacity": {"condition": {"test": {"and": [{"param": "focus_vessel"}, {"param": "focus_metric"}]}, "value": 1}, "value": 0.12},
                 "tooltip": [{"field": "ShipName", "title": "Vessel"}, {"field": "Metric"},
                     {"field": "DateTime", "type": "temporal"}, {"field": "Value", "format": ",.3f"}]
             }})
+    # Attach selections once to the first layer: all layers share one plot view.
+    # Explicit mark events preserve line clicking when the selection is legend-bound.
+    layers[0]["params"] = [
+        {"name": "time_zoom", "select": {"type": "interval", "encodings": ["x"]}, "bind": "scales"},
+        {"name": "focus_vessel", "select": {"type": "point", "fields": ["ShipName"],
+            "on": "click", "toggle": "event.shiftKey", "clear": "dblclick"}, "bind": "legend"},
+        {"name": "focus_metric", "select": {"type": "point", "fields": ["Metric"],
+            "on": "click", "toggle": "event.shiftKey", "clear": "dblclick"}, "bind": "legend"},
+    ]
     spec = {"data": {"values": records}, "layer": layers, "height": 430,
-            "resolve": {"scale": {"y": "independent"}},
-            "params": [{"name": "time_zoom", "select": {"type": "interval", "encodings": ["x"]}, "bind": "scales"}]}
+            "resolve": {"scale": {"y": "independent"}}}
     if len(layers) == 1:
         # A plain unit chart needs no independent scale resolution.
         spec.pop("layer")
@@ -9731,7 +9740,7 @@ def render_visual_analytics(long_df, default_vessels, default_start, default_end
         if chart_data.empty or not chart_data[chart_config["variables"]].notna().any().any():
             st.info("No data for these chart selections.")
         else:
-            st.caption("Colour identifies vessel; line style identifies metric. Drag or scroll to zoom. Missing values remain gaps.")
+            st.caption("Click a line or vessel/metric legend to highlight it; Shift-click to select several. Double-click the plot or legend to clear. Drag or scroll to zoom. Missing values remain gaps.")
             if chart_config.get("separate_groups"):
                 for metrics in chart_config["separate_groups"]:
                     st.markdown("**" + escape(visual_metric_unit(metrics[0])) + "**")
@@ -9790,12 +9799,15 @@ def render_visual_analytics(long_df, default_vessels, default_start, default_end
         scatter = pair[["ShipName", "DateTime", x, y]].rename(columns={x: "XValue", y: "YValue"})
         scatter["DateTime"] = scatter["DateTime"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         st.vega_lite_chart(spec={"data": {"values": json.loads(scatter.to_json(orient="records"))},
-            "mark": {"type": "point", "filled": True, "opacity": 0.65}, "height": 350,
+            "mark": {"type": "point", "filled": True}, "height": 350,
+            "params": [{"name": "scatter_vessel", "select": {"type": "point", "fields": ["ShipName"],
+                "on": "click", "toggle": "event.shiftKey", "clear": "dblclick"}, "bind": "legend"}],
             "encoding": {"x": {"field": "XValue", "type": "quantitative", "title": x, "scale": {"zero": False}},
                 "y": {"field": "YValue", "type": "quantitative", "title": y, "scale": {"zero": False}},
                 "color": {"field": "ShipName", "type": "nominal", "title": "Vessel"},
+                "opacity": {"condition": {"param": "scatter_vessel", "value": 0.8}, "value": 0.1},
                 "tooltip": [{"field": "ShipName"}, {"field": "DateTime"}, {"field": "XValue"}, {"field": "YValue"}]}}, use_container_width=True)
-        st.caption(f"{len(pair):,} matching observations. Each point represents one report or aggregated vessel-period.")
+        st.caption(f"{len(pair):,} matching observations. Click a vessel legend or point to highlight its vessel; Shift-click for several, double-click to clear. Selection does not change the correlation matrix or its inputs.")
     visual_download("atlasflow_correlations", {"Coefficients": pd.concat(coefficients, ignore_index=True),
         "Paired Counts": pd.concat(observation_counts, ignore_index=True), "Aligned Data": data,
         "Settings": pd.DataFrame({"Setting": list(corr_config), "Value": [str(v) for v in corr_config.values()]})})
