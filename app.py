@@ -289,6 +289,7 @@ CARGO_VALUE_ALIASES = {
     "Cargo Checked: Bridges": ["Cargo Checked: Bridges"],
     "Cargo Checked: Lashings": ["Cargo Checked: Lashings"],
     "Reefer Energy [kWh]": ["Reefer Energy [kWh]"],
+    "Reefer Power [kW]": ["Reefer Power [kW]"],
     "Total Reefer Power Draw (kW)": ["Total Reefer Power Draw (kW)"],
     "Average Power per Reefer [kW]": ["Average Power per Reefer [kW]"],
     "Total Reefer Power (kW)": ["Total Reefer Power (kW)", "Total Reefer Power [kW] (kW)"],
