@@ -291,7 +291,7 @@ CARGO_VALUE_ALIASES = {
     "Reefer Energy [kWh]": ["Reefer Energy [kWh]"],
     "Total Reefer Power Draw (kW)": ["Total Reefer Power Draw (kW)"],
     "Average Power per Reefer [kW]": ["Average Power per Reefer [kW]"],
-    "Total Reefer Power (kW)": ["Total Reefer Power Draw (kW)", "Total Reefer Power[kW] (kW)",],
+    "Total Reefer Power (kW)": ["Total Reefer Power Draw (kW)", "Total Reefer Power[kW] (kW)"],
 
     # Voyage route context. Marorka ReportPivots exposes UN/LOCODEs only, while
     # ReportData also carries the user-facing full port names on Departure/Arrival reports.
