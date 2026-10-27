@@ -9581,6 +9581,28 @@ def visual_download(prefix: str, sheets: dict[str, pd.DataFrame]):
                            key=f"{prefix}_download")
 
 
+def visual_metric_unit(variable: str) -> str:
+    """Read explicit units from API labels; don't infer physical units from magnitudes."""
+    matches = re.findall(r"\[([^\]]+)\]|\(([^()]+)\)", variable)
+    units = [a or b for a, b in matches]
+    unit = units[0] if units else ""
+    unit = re.sub(r"\s+", "", unit).casefold()
+    aliases = {"kw": "kW", "kwh": "kWh", "mt": "tons", "tonnes": "tons", "tons": "tons",
+               "kn": "kn", "knots": "kn", "ltr": "litres", "l": "litres", "liters": "litres",
+               "hh:mm": "hours", "h": "hours", "hours": "hours", "%mcr": "% MCR", "%": "%"}
+    if not unit and (re.search(r"\bunits\b", variable, re.I) or re.search(r"\bnumber\b", variable, re.I)):
+        return "units"
+    return aliases.get(unit, unit) or "Unit unspecified"
+
+
+def visual_auto_axes(variables):
+    groups = {}
+    for variable in variables:
+        groups.setdefault(visual_metric_unit(variable), []).append(variable)
+    grouped = list(groups.values())
+    return (grouped[1] if len(grouped) == 2 else []), (grouped if len(grouped) > 2 else [])
+
+
 def visual_controls(prefix, vessels, options, types, start, end, defaults, correlation=False):
     # Live widgets, with separate keys for time series and correlation inputs.
     with st.container(border=True):
@@ -9599,17 +9621,31 @@ def visual_controls(prefix, vessels, options, types, start, end, defaults, corre
             extra["pool"] = c.checkbox("Pool vessels into one matrix", key=f"{prefix}_pool",
                 help="Vessel operating levels can create misleading pooled correlations. Separate matrices are the default.")
         else:
-            extra["secondary"] = []
+            automatic_secondary, separate_groups = visual_auto_axes(variables)
+            extra["secondary"] = automatic_secondary
+            extra["separate_groups"] = separate_groups
+            overrides = {}
             if len(variables) > 1:
-                dual_axis = st.checkbox("Use secondary Y axis", key=f"{prefix}_dual_axis",
-                    help="Enable for different units or scales. Otherwise all variables share the left axis.")
-                if dual_axis:
-                    st.caption("Choose an axis for each selected variable. Keep compatible units on each axis.")
-                    for i, variable in enumerate(variables):
-                        axis = st.radio(variable, ["Left", "Right"], index=0 if i == 0 else 1,
-                            horizontal=True, key=f"{prefix}_axis_{sha256(variable.encode()).hexdigest()[:16]}")
-                        if axis == "Right":
-                            extra["secondary"].append(variable)
+                if separate_groups:
+                    st.caption("More than two units selected: separate charts are shown by unit.")
+                elif automatic_secondary:
+                    st.caption("Different units: axes are assigned automatically. Left: "
+                        + visual_metric_unit(variables[0]) + "; right: " + visual_metric_unit(automatic_secondary[0]) + ".")
+                else:
+                    st.caption("Matching units: all variables share the left Y axis.")
+                with st.expander("Axis overrides (optional)"):
+                    st.caption("Keep Auto unless you need a different scale. Independent axes can make different magnitudes look similar.")
+                    for variable in variables:
+                        axis = st.selectbox(variable, ["Auto", "Left", "Right"],
+                            key=f"{prefix}_axis_auto_{sha256(variable.encode()).hexdigest()[:16]}")
+                        if axis != "Auto":
+                            overrides[variable] = axis
+                if overrides:
+                    extra["separate_groups"] = []
+                    extra["secondary"] = [v for v in variables
+                        if overrides.get(v, "Right" if v in automatic_secondary else "Left") == "Right"]
+            if variables and any(visual_metric_unit(v) == "Unit unspecified" for v in variables):
+                st.caption("Some labels have no unit; check their units and use an axis override if needed.")
         st.caption("Charts update automatically when you change these selections.")
     if len(period) != 2 or period[0] > period[1]:
         st.info("Select a valid start and end date.")
@@ -9649,6 +9685,11 @@ def visual_chart(data, variables, secondary):
     spec = {"data": {"values": records}, "layer": layers, "height": 430,
             "resolve": {"scale": {"y": "independent"}},
             "params": [{"name": "time_zoom", "select": {"type": "interval", "encodings": ["x"]}, "bind": "scales"}]}
+    if len(layers) == 1:
+        # A plain unit chart needs no independent scale resolution.
+        spec.pop("layer")
+        spec.pop("resolve")
+        spec.update(layers[0])
     st.vega_lite_chart(spec=spec, use_container_width=True)
 
 
@@ -9691,7 +9732,12 @@ def render_visual_analytics(long_df, default_vessels, default_start, default_end
             st.info("No data for these chart selections.")
         else:
             st.caption("Colour identifies vessel; line style identifies metric. Drag or scroll to zoom. Missing values remain gaps.")
-            visual_chart(chart_data, chart_config["variables"], chart_config["secondary"])
+            if chart_config.get("separate_groups"):
+                for metrics in chart_config["separate_groups"]:
+                    st.markdown("**" + escape(visual_metric_unit(metrics[0])) + "**")
+                    visual_chart(chart_data, metrics, [])
+            else:
+                visual_chart(chart_data, chart_config["variables"], chart_config["secondary"])
             empty_metrics = [v for v in chart_config["variables"] if chart_data[v].notna().sum() == 0]
             if empty_metrics:
                 st.info("No data for: " + ", ".join(empty_metrics))
