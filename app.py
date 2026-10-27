@@ -8855,6 +8855,7 @@ def pivot_cargo_reports(cargo_long: pd.DataFrame) -> pd.DataFrame:
     return pivot.sort_values(
         ["StartDateTimeGMT", "ReportId"],
         ascending=[True, True],
+    ).reset_index(drop=True)
 
 def filter_reportpivots_for_voyage(
     reportpivots_df: pd.DataFrame,
