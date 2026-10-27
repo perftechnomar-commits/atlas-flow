@@ -9643,7 +9643,7 @@ def main() -> None:
             st.session_state.pop("atlas_filtered_long_cache_signature", None)
 
     variable_options = sorted(
-        set(available_variables(filtered_long_for_options)).union(DERIVED_VARIABLES),
+        set(available_variables(long_df)).union(DERIVED_VARIABLES),
         key=str.casefold,
     )
     st.sidebar.markdown("### Pivot variables")
