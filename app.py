@@ -9587,7 +9587,7 @@ def visual_controls(prefix, vessels, options, types, start, end, defaults, corre
         chosen_vessels = a.multiselect("Vessels", vessels, default=defaults, key=f"{prefix}_vessels")
         variables = b.multiselect("Numeric variables", options, key=f"{prefix}_variables")
         a, b, c = st.columns(3)
-        period = a.date_input("Period (report end, UTC)", value=(start, end), key=f"{prefix}_period")
+        period = a.date_input("Period (report end, UTC)", value=(start, end), format="DD/MM/YYYY", key=f"{prefix}_period")
         resolution = b.selectbox("Resolution", ["Original reports", "Daily averages", "Weekly averages", "Monthly averages"], key=f"{prefix}_resolution")
         report_types = c.multiselect("Report types", types, default=types, key=f"{prefix}_types")
         extra = {}
