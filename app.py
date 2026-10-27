@@ -9814,6 +9814,129 @@ def render_visual_analytics(long_df, default_vessels, default_start, default_end
 
 
 
+def visual_radar_profile(data, variables, benchmarks):
+    actual = data.groupby("ShipName", observed=True)[variables].mean().apply(pd.to_numeric, errors="coerce")
+    reference = pd.Series(benchmarks).reindex(variables).astype(float)
+    reference = reference.where(reference.gt(0))
+    profile = actual.div(reference, axis="columns") * 100
+    return actual, profile.replace([float("inf"), -float("inf")], float("nan")), reference
+
+
+def visual_radar_chart(profile, actual, reference):
+    import math
+    variables = list(profile.columns)
+    maximum = max(100.0, float(profile.max().max()))
+    limit = math.ceil(maximum / 25.0) * 25.0
+    cells, grid, spokes, labels = [], [], [], []
+    def position(index, radius):
+        angle = index * 2 * math.pi / len(variables)
+        return math.sin(angle) * radius, math.cos(angle) * radius
+    for i, metric in enumerate(variables):
+        x, y = position(i, limit)
+        spokes.extend([dict(Axis=metric, X=0, Y=0, Order=0), dict(Axis=metric, X=x, Y=y, Order=1)])
+        x, y = position(i, limit*1.16)
+        labels.append(dict(X=x, Y=y, Label=metric))
+    for radius in sorted({100.0, limit/4, limit/2, limit*3/4, limit}):
+        for i in range(len(variables)+1):
+            x, y = position(i % len(variables), radius)
+            grid.append(dict(Ring=radius, X=x, Y=y, Order=i))
+    for vessel, row in profile.iterrows():
+        for i in range(len(variables)+1):
+            metric = variables[i % len(variables)]
+            x, y = position(i % len(variables), float(row[metric]))
+            cells.append(dict(Vessel=str(vessel), Metric=metric, X=x, Y=y, Order=i,
+                Index=float(row[metric]), Actual=float(actual.loc[vessel, metric]), Reference=float(reference[metric])))
+    domain = [-limit*1.55, limit*1.55]
+    xy = {"x": {"field": "X", "type": "quantitative", "axis": None, "scale": {"domain": domain}},
+          "y": {"field": "Y", "type": "quantitative", "axis": None, "scale": {"domain": domain}}}
+    tooltip = [{"field": "Vessel"}, {"field": "Metric"}, {"field": "Actual", "format": ",.3f"},
+               {"field": "Reference", "format": ",.3f"}, {"field": "Index", "format": ".1f"}]
+    vessel_style = {"field": "Vessel", "type": "nominal", "title": "Vessel"}
+    layers = [
+        {"data": {"values": grid}, "mark": {"type": "line", "color": "#d8e3e5", "strokeWidth": 1},
+         "encoding": {**xy, "color": {"condition": {"test": "datum.Ring === 100", "value": "#007f7a"}, "value": "#d8e3e5"}, "detail": {"field": "Ring"}, "order": {"field": "Order"}}},
+        {"data": {"values": spokes}, "mark": {"type": "line", "color": "#d8e3e5"},
+         "encoding": {**xy, "detail": {"field": "Axis"}, "order": {"field": "Order"}}},
+        {"data": {"values": labels}, "mark": {"type": "text", "fontSize": 11, "limit": 220},
+         "encoding": {**xy, "text": {"field": "Label"}}},
+        {"data": {"values": cells}, "params": [{"name": "radar_vessel", "select": {"type": "point",
+            "fields": ["Vessel"], "on": "click", "clear": "dblclick", "toggle": "event.shiftKey"}, "bind": "legend"}],
+         "mark": {"type": "line", "strokeWidth": 2.5, "fillOpacity": 0.07},
+         "encoding": {**xy, "color": vessel_style, "fill": vessel_style,
+            "order": {"field": "Order"}, "detail": {"field": "Vessel"},
+            "opacity": {"condition": {"param": "radar_vessel", "value": 1}, "value": 0.12}, "tooltip": tooltip}},
+        {"data": {"values": cells}, "mark": {"type": "point", "filled": True, "size": 65},
+         "encoding": {**xy, "color": vessel_style, "tooltip": tooltip,
+            "opacity": {"condition": {"param": "radar_vessel", "value": 1}, "value": 0.12}}},
+    ]
+    st.vega_lite_chart(spec={"layer": layers, "width": 620, "height": 620,
+        "config": {"view": {"stroke": None}}}, use_container_width=False)
+    st.caption("Radial grid: " + " / ".join(f"{limit*i/4:g}" for i in range(1,5))
+        + ". The teal ring marks 100 (the reference). Click a vessel legend to highlight; Shift-click for several, double-click to clear.")
+
+
+def render_visual_radar(long_df, default_vessels, default_start, default_end):
+    st.divider()
+    st.subheader("Vessel Profile · Spider Chart")
+    st.caption("Independent inputs. Compare period averages across 3–8 metrics and up to 3 vessels. Values are normalised for mixed units; larger shapes do not imply better performance.")
+    vessels = sorted(long_df["ShipName"].dropna().astype(str).unique(), key=str.casefold)
+    wanted = {normalize_text(v) for v in default_vessels}
+    defaults = [v for v in vessels if normalize_text(v) in wanted][:3]
+    options = visual_numeric_options(long_df)
+    with st.container(border=True):
+        a,b = st.columns(2)
+        chosen = a.multiselect("Vessels", vessels, default=defaults, max_selections=3, key="va_radar_vessels")
+        variables = b.multiselect("Variables", options, max_selections=8, key="va_radar_variables")
+        a,b,c = st.columns(3)
+        period = a.date_input("Period (report end, UTC)", value=(default_start,default_end), format="DD/MM/YYYY", key="va_radar_period")
+        types = b.multiselect("Report types", available_report_types(long_df), default=available_report_types(long_df), key="va_radar_types")
+        mode = c.selectbox("Reference", ["Fleet average = 100", "Custom benchmarks = 100"], key="va_radar_mode")
+        benchmarks = {}
+        if mode == "Custom benchmarks = 100":
+            st.caption("Enter a positive reference in each metric's original unit. No performance direction or score is assumed.")
+            for metric in variables:
+                benchmarks[metric] = st.number_input(metric, min_value=0.0, value=0.0,
+                    key="va_radar_ref_"+sha256(metric.encode()).hexdigest()[:16])
+    if not chosen or len(variables)<3 or not types or len(period)!=2:
+        st.info("Select 1–3 vessels, 3–8 variables, report types and a complete period.")
+        return
+    if mode == "Custom benchmarks = 100" and any(v<=0 for v in benchmarks.values()):
+        st.info("Enter a positive benchmark for every selected variable.")
+        return
+    config = dict(vessels=vessels if mode == "Fleet average = 100" else chosen,
+        variables=variables, start=period[0], end=period[1], types=types, resolution="Original reports")
+    data = visual_build_data(long_df, config)
+    if data.empty:
+        st.info("No data for these spider-chart selections.")
+        return
+    if mode == "Fleet average = 100":
+        # Each vessel contributes one period mean, so reporting frequency does not weight the fleet reference.
+        benchmarks = data.groupby("ShipName", observed=True)[variables].mean().mean().to_dict()
+        st.caption("Fleet reference: equal-weight mean of each vessel's period average, using the selected report types. The reference includes all loaded vessels with data, not only the plotted vessels.")
+    actual, profile, reference = visual_radar_profile(data, variables, benchmarks)
+    actual = actual.reindex(chosen)
+    profile = profile.reindex(chosen)
+    complete = profile.notna().all(axis=1) & profile.ge(0).all(axis=1)
+    skipped = list(profile.index[~complete])
+    if skipped:
+        st.info("Not plotted (missing values, negative values or unavailable/non-positive reference): " + ", ".join(skipped)
+                + ". Missing values are never replaced with zero.")
+    if complete.any():
+        visual_radar_chart(profile.loc[complete], actual.loc[complete], reference)
+    st.markdown("**Actual period averages (original units)**")
+    st.dataframe(actual.style.format("{:.3f}",na_rep="N/A"), use_container_width=True)
+    with st.expander("Normalised values, references and observation counts"):
+        st.dataframe(profile.style.format("{:.1f}",na_rep="N/A"), use_container_width=True)
+        st.dataframe(reference.rename("Reference").to_frame(), use_container_width=True)
+        st.dataframe(data.groupby("ShipName",observed=True)[variables].count().reindex(chosen).fillna(0).astype(int), use_container_width=True)
+    settings = dict(config, vessels=chosen, reference=mode)
+    selected_data = data.loc[data["ShipName"].isin(chosen)]
+    visual_download("atlasflow_spider_chart", {"Actual Averages": actual.rename_axis("Vessel").reset_index(),
+        "Normalised Profile": profile.rename_axis("Vessel").reset_index(),
+        "References": reference.rename_axis("Variable").reset_index(name="Reference"),
+        "Observations": selected_data, "Settings": pd.DataFrame({"Setting":list(settings),"Value":[str(v) for v in settings.values()]})})
+
+
 def main() -> None:
     run_warmup_if_requested()
     require_dashboard_password()
@@ -10148,6 +10271,7 @@ def main() -> None:
 
     elif workspace == "Visual Analytics":
         render_visual_analytics(long_df, selected_vessels, selected_start, selected_end)
+        render_visual_radar(long_df, selected_vessels, selected_start, selected_end)
 
     elif workspace == "Custom Analytics":
         st.markdown('<div class="section-title">Custom Analytics Preview & Export</div>', unsafe_allow_html=True)
