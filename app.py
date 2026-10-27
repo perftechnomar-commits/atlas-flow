@@ -8834,14 +8834,27 @@ def pivot_cargo_reports(cargo_long: pd.DataFrame) -> pd.DataFrame:
     work = work.sort_values("_source_order").drop_duplicates(
         [*CARGO_REPORT_IDENTITY_COLUMNS, "ValueDescription"], keep="last"
     )
-    values = work["ParsedValue"].where(work["ParsedValue"].notna(), work["ReportedValue"])
+    parsed = work["ParsedValue"].astype(object)
+    reported = work["ReportedValue"].astype(object)
+    values = parsed.where(parsed.notna(), reported)
+    
     work["_cargo_value"] = values
-    pivot = work.pivot(index=CARGO_REPORT_IDENTITY_COLUMNS, columns="ValueDescription", values="_cargo_value").reset_index()
+    pivot = work.pivot(
+        index=CARGO_REPORT_IDENTITY_COLUMNS,
+        columns="ValueDescription",
+        values="_cargo_value",
+    ).reset_index()
+    
     pivot.columns.name = None
-    pivot["StartDateTimeGMT"] = pd.to_datetime(pivot["StartDateTimeGMT"], errors="coerce", utc=True)
-    pivot["EndDateTimeGMT"] = pd.to_datetime(pivot["EndDateTimeGMT"], errors="coerce", utc=True)
-    return pivot.sort_values(["StartDateTimeGMT", "ReportId"], ascending=[True, True]).reset_index(drop=True)
-
+    pivot["StartDateTimeGMT"] = pd.to_datetime(
+        pivot["StartDateTimeGMT"], errors="coerce", utc=True
+    )
+    pivot["EndDateTimeGMT"] = pd.to_datetime(
+        pivot["EndDateTimeGMT"], errors="coerce", utc=True
+    )
+    return pivot.sort_values(
+        ["StartDateTimeGMT", "ReportId"],
+        ascending=[True, True],
 
 def filter_reportpivots_for_voyage(
     reportpivots_df: pd.DataFrame,
