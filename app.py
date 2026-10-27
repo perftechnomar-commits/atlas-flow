@@ -9582,10 +9582,11 @@ def visual_download(prefix: str, sheets: dict[str, pd.DataFrame]):
 
 
 def visual_controls(prefix, vessels, options, types, start, end, defaults, correlation=False):
-    with st.form(f"{prefix}_form"):
+    # Live widgets, with separate keys for time series and correlation inputs.
+    with st.container(border=True):
         a, b = st.columns(2)
         chosen_vessels = a.multiselect("Vessels", vessels, default=defaults, key=f"{prefix}_vessels")
-        variables = b.multiselect("Numeric variables", options, key=f"{prefix}_variables")
+        variables = b.multiselect("Variables", options, key=f"{prefix}_variables")
         a, b, c = st.columns(3)
         period = a.date_input("Period (report end, UTC)", value=(start, end), format="DD/MM/YYYY", key=f"{prefix}_period")
         resolution = b.selectbox("Resolution", ["Original reports", "Daily averages", "Weekly averages", "Monthly averages"], key=f"{prefix}_resolution")
@@ -9598,20 +9599,29 @@ def visual_controls(prefix, vessels, options, types, start, end, defaults, corre
             extra["pool"] = c.checkbox("Pool vessels into one matrix", key=f"{prefix}_pool",
                 help="Vessel operating levels can create misleading pooled correlations. Separate matrices are the default.")
         else:
-            extra["secondary"] = st.multiselect("Variables on secondary Y axis", options, key=f"{prefix}_secondary",
-                help="Choose from the numeric variables selected above. All other selected variables use the left axis. Keep compatible units on each axis.")
-        submitted = st.form_submit_button("Generate correlation analysis" if correlation else "Generate line chart", type="primary")
-    if submitted:
-        if len(period) != 2 or period[0] > period[1]:
-            st.error("Select a valid start and end date.")
-        elif not chosen_vessels or not report_types or len(variables) < (2 if correlation else 1):
-            st.error("Select vessels, report types and " + ("at least two numeric variables." if correlation else "at least one numeric variable."))
-        elif not correlation and not set(extra["secondary"]).issubset(variables):
-            st.error("Secondary-axis variables must also be selected in Numeric variables.")
-        else:
-            st.session_state[f"{prefix}_config"] = dict(vessels=chosen_vessels, variables=variables,
-                start=period[0], end=period[1], resolution=resolution, types=report_types, **extra)
-    return st.session_state.get(f"{prefix}_config")
+            extra["secondary"] = []
+            if len(variables) > 1:
+                dual_axis = st.checkbox("Use secondary Y axis", key=f"{prefix}_dual_axis",
+                    help="Enable for different units or scales. Otherwise all variables share the left axis.")
+                if dual_axis:
+                    st.caption("Choose an axis for each selected variable. Keep compatible units on each axis.")
+                    for i, variable in enumerate(variables):
+                        axis = st.radio(variable, ["Left", "Right"], index=0 if i == 0 else 1,
+                            horizontal=True, key=f"{prefix}_axis_{sha256(variable.encode()).hexdigest()[:16]}")
+                        if axis == "Right":
+                            extra["secondary"].append(variable)
+        st.caption("Charts update automatically when you change these selections.")
+    if len(period) != 2 or period[0] > period[1]:
+        st.info("Select a valid start and end date.")
+        return None
+    if not chosen_vessels or not report_types or len(variables) < (2 if correlation else 1):
+        st.info("Select vessels, report types and " + ("at least two variables for correlation analysis." if correlation else "at least one variable to display the line chart."))
+        st.session_state.pop(f"{prefix}_config", None)
+        return None
+    config = dict(vessels=chosen_vessels, variables=variables, start=period[0], end=period[1],
+                  resolution=resolution, types=report_types, **extra)
+    st.session_state[f"{prefix}_config"] = config
+    return config
 
 
 def visual_chart(data, variables, secondary):
@@ -9639,7 +9649,7 @@ def visual_chart(data, variables, secondary):
     spec = {"data": {"values": records}, "layer": layers, "height": 430,
             "resolve": {"scale": {"y": "independent"}},
             "params": [{"name": "time_zoom", "select": {"type": "interval", "encodings": ["x"]}, "bind": "scales"}]}
-    st.vega_lite_chart(spec, use_container_width=True)
+    st.vega_lite_chart(spec=spec, use_container_width=True)
 
 
 def visual_heatmap(matrix, counts):
@@ -9652,7 +9662,7 @@ def visual_heatmap(matrix, counts):
     base = {"x": {"field": "X", "type": "ordinal", "sort": list(matrix.columns), "title": None,
                   "axis": {"labelAngle": -35, "labelLimit": 230}},
             "y": {"field": "Y", "type": "ordinal", "sort": list(matrix.index), "title": None, "axis": {"labelLimit": 230}}}
-    st.vega_lite_chart({"data": {"values": cells}, "height": max(200, len(matrix) * 42),
+    st.vega_lite_chart(spec={"data": {"values": cells}, "height": max(200, len(matrix) * 42),
         "layer": [{"mark": "rect", "encoding": {**base,
             "color": {"condition": {"test": "isValid(datum.Correlation)", "field": "Correlation", "type": "quantitative",
                 "scale": {"domain": [-1, 1], "scheme": "redblue"}}, "value": "#eeeeee"},
@@ -9733,7 +9743,7 @@ def render_visual_analytics(long_df, default_vessels, default_start, default_end
     else:
         scatter = pair[["ShipName", "DateTime", x, y]].rename(columns={x: "XValue", y: "YValue"})
         scatter["DateTime"] = scatter["DateTime"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        st.vega_lite_chart({"data": {"values": json.loads(scatter.to_json(orient="records"))},
+        st.vega_lite_chart(spec={"data": {"values": json.loads(scatter.to_json(orient="records"))},
             "mark": {"type": "point", "filled": True, "opacity": 0.65}, "height": 350,
             "encoding": {"x": {"field": "XValue", "type": "quantitative", "title": x, "scale": {"zero": False}},
                 "y": {"field": "YValue", "type": "quantitative", "title": y, "scale": {"zero": False}},
